@@ -26,6 +26,7 @@ ROWS = [("사과 주스", "작은 컵", 1, 3600), ("사과 주스", "큰 컵", 2
 CONFIRM = "확인한 내용으로 실행"
 MODEL = "qwen3.5:9b"
 TITLE = "물결 주스 스탠드"
+OBSERVER_DEADLINE = time.monotonic() + 45 * 60
 
 
 def require(condition, message):
@@ -75,22 +76,23 @@ def connect_controller(port):
     with urlopen(origin, timeout=10) as response:
         token = re.search(r'nonce="([a-f0-9]{64})"', response.read().decode())[1]
 
-    def call(action, payload=None):
+    def call(action, payload=None, *, until=None):
         headers = {"Origin": origin, "X-KioskAI-Token": token, "Content-Type": "application/json"}
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = Request(f"{origin}/api/{action}", data=body, headers=headers)
         # A slow response to a status read must not cancel an order in progress.
         if action == "state" and body is None:
-            deadline = time.monotonic() + 240
-            while True:
+            deadline = min(OBSERVER_DEADLINE, until if until is not None else time.monotonic() + 45)
+            while time.monotonic() < deadline:
                 try:
-                    with urlopen(request, timeout=45) as response:
+                    with urlopen(request, timeout=max(.1, min(45, deadline - time.monotonic()))) as response:
                         return json.load(response)
                 except (TimeoutError, ConnectionResetError, URLError) as error:
                     if getattr(error, "code", None) or time.monotonic() >= deadline:
                         raise
                     print("Waiting for the local controller to answer the status check.", flush=True)
                     time.sleep(2)
+            raise TimeoutError("Controller status did not arrive before the observation deadline.")
         with urlopen(request, timeout=45) as response:
             return json.load(response)
     return call
@@ -350,6 +352,7 @@ def collect_product_logs(app, report, hwnd, url):
         root = app / "logs" / run_id
         result = json.loads((root / "result.json").read_text(encoding="utf-8"))
         decisions = []
+        steps = []
         observations = []
         for path in sorted(root.glob("*.json")):
             entry = json.loads(path.read_text(encoding="utf-8"))
@@ -360,11 +363,27 @@ def collect_product_logs(app, report, hwnd, url):
                 same_target = (str(window.get("id")) == str(hwnd)
                                and str(entry.get("url", "")).rstrip("/") == url.rstrip("/"))
                 observations.append({"file": path.name, "owned_fixture": same_target,
-                                     "automatic_binding": entry.get("auto_store_bound") is True})
+                                     "automatic_binding": entry.get("auto_store_bound") is True,
+                                     "recognized_option_editor": bool(entry.get("inline_draft_id") or entry.get("draft_add_id")),
+                                     "recognized_item": public_text(entry.get("draft_item") or ""),
+                                     "recognized_add_button": bool(entry.get("draft_add_id"))})
             if entry.get("provider") == "ollama" and entry.get("response_model"):
-                decisions.append({"file": path.name, "provider": "ollama", "model": entry["response_model"]})
+                timing = {k: v for k, v in (entry.get("ollama_seconds") or {}).items()
+                          if k in ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration")
+                          and type(v) in (int, float)}
+                decisions.append({"file": path.name, "provider": "ollama", "model": entry["response_model"],
+                                  "request_seconds": entry.get("request_seconds"), "ollama_seconds": timing})
+            if path.name.endswith("-plan.json"):
+                decision = entry.get("decision") or {}
+                steps.append({"file": path.name, "role": public_text(entry.get("workflow_role", "")),
+                              "action": public_text(decision.get("action", "")), "message": public_text(decision.get("message", ""))})
+        fault = {key: public_text(result[key]) for key in ("error_type", "error_phase", "message") if key in result}
+        if type(result.get("error_hresult")) is int:
+            hresult = result["error_hresult"]
+            fault.update(error_hresult=hresult, hresult_hex=f"0x{hresult & 0xffffffff:08X}")
         runs.append({"run_id": run_id, "status": result.get("status"), "os_mouse_control": result.get("os_mouse_control"),
                      "executor": result.get("executor"), "observations": observations, "model_calls": decisions,
+                     "steps": steps, "product_result": fault,
                      "menu_inventory": {k: v for k, v in (result.get("menu_inventory") or {}).items()
                                         if k in ("status", "source", "products", "categories")}})
     return runs
@@ -410,14 +429,15 @@ def exercise(page, proc, api, report, app, out, url, server):
     report["viewport"] = page.evaluate("({width:innerWidth, height:innerHeight})")
     cursor = max((event["id"] for event in initial["events"]), default=0)
     start = time.monotonic()
+    order_deadline = OBSERVER_DEADLINE - 150
     try:
         require(api("goal", {"goal": GOAL}).get("accepted"), "The installed controller declined the order.")
         report["goal_submissions"] = 1
         print("One targetless order submitted.", flush=True)
         answered = None
-        while time.monotonic() - start < 2700:
+        while time.monotonic() < order_deadline:
             own_foreground(hwnd, page, url)
-            state = api("state")
+            state = api("state", until=order_deadline)
             witness = read()
             current = witness["last"]
             for event in state["events"]:
@@ -437,20 +457,26 @@ def exercise(page, proc, api, report, app, out, url, server):
                     report["run_ids"].append(run_id)
                 question = state.get("clarification")
                 if question and question["id"] != answered:
-                    require(answered is None and question.get("agent_action") == "confirm"
+                    expected = (answered is None and question.get("agent_action") == "confirm"
                             and str(question.get("target")) == str(hwnd) and CONFIRM in question.get("options", [])
-                            and current["stage"] in ("review", "payment") and exact(current),
-                            "Unexpected question or incorrect order at the confirmation step.")
+                            and current["stage"] in ("review", "payment") and exact(current))
+                    if not expected:
+                        report["failure_origin"] = "product_order_or_clarification"
+                        report["status"] = result.get("status")
+                        raise RuntimeError("Unexpected question or incorrect order at the confirmation step.")
                     answered = question["id"]
                     require(api("clarify", {"id": answered, "target": question["target"], "answer": CONFIRM})["accepted"],
                             "The controller declined the normal confirmation.")
                     report["confirmations"] = 1
                 elif not question:
                     report["status"] = result.get("status")
+                    if report["status"] != "completed":
+                        report["failure_origin"] = "product"
+                        report["product_message"] = public_text(result.get("message", ""))
                     break
             time.sleep(1.2)
         else:
-            raise RuntimeError("The order exceeded 45 minutes.")
+            raise TimeoutError("The observer reached the reserved order cutoff before 45 minutes.")
         own_foreground(hwnd, page, url)
         at_completion = read()
         time.sleep(2)
@@ -488,16 +514,21 @@ def exercise(page, proc, api, report, app, out, url, server):
                                                and all(obs["owned_fixture"] for obs in observations),
             "actual_local_model_response": bool(calls) and all(call["model"] == MODEL for call in calls),
         }
-        require(all(report["checks"].values()), "See the failed checks in order.json.")
+        if not all(report["checks"].values()):
+            report.setdefault("failure_origin", "independent_order_verification")
+            raise RuntimeError(report.get("product_message") or "See the failed checks in order.json.")
     finally:
         try:
-            if report["goal_submissions"] and api("state")["busy"]:
+            if report["goal_submissions"] and not report.get("status") and api("state", until=time.monotonic() + 6)["busy"]:
                 api("stop", {})
-                wait_for(lambda: not api("state")["busy"], 30, "Controller did not acknowledge stop.")
+                stop_deadline = time.monotonic() + 22
+                wait_for(lambda: not api("state", until=stop_deadline)["busy"], 22, "Controller did not acknowledge stop.")
+        except Exception as error:
+            report["cleanup_note"] = public_text(error)
         finally:
             if report["goal_submissions"] and not (out / "production-order.json").exists():
                 with suppress(Exception):
-                    latest = (api("state").get("last_result") or {}).get("run_id")
+                    latest = (api("state", until=time.monotonic() + 5).get("last_result") or {}).get("run_id")
                     if latest and latest not in report["run_ids"]:
                         report["run_ids"].append(latest)
                     save(out / "production-order.json", collect_product_logs(app, report, hwnd, url))
@@ -546,6 +577,7 @@ def main():
                 exercise(page, proc, api, report, app, out, url, server)
             except Exception as error:
                 report["error"] = public_text(error)
+                report.setdefault("failure_origin", "test_observer")
                 report["feed_requests_at_failure"] = server.feed_requests
                 # Freeze the result before running any separate product diagnostic.
                 save(out / "order.json", report)
@@ -565,6 +597,7 @@ def main():
                 raise
         report["passed"] = True
     except Exception as error:
+        report.setdefault("failure_origin", "test_observer")
         report["error"] = f"{type(error).__name__}: {public_text(error)}"
         if api and "controller_at_failure" not in report:
             with suppress(Exception):

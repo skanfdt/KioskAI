@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(2, 42)][int]$WaitMinutes = 34)
+param([ValidateRange(2, 42)][int]$WaitMinutes = 34, [switch]$ExactModelTrace)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -188,8 +188,30 @@ try {
 
     $result.stage = 'normal-installer'
     # Persistent native file redirection keeps the app's output writable in later workflow steps.
-    @('@echo off','"%~dp0KioskAI-Setup.exe" <NUL >"%~dp0setup.stdout" 2>"%~dp0setup.stderr"','exit /b %errorlevel%') |
-        Set-Content -LiteralPath (Join-Path $privateDir 'launch.cmd') -Encoding ascii
+    $launchLines = @('@echo off','"%~dp0KioskAI-Setup.exe" <NUL >"%~dp0setup.stdout" 2>"%~dp0setup.stderr"','exit /b %errorlevel%')
+    if ($ExactModelTrace) {
+        $result.stage = 'preparing-exact-model'
+        $expectedDigest = '6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7'
+        & (Join-Path $PSScriptRoot 'Prepare-ExactModel.ps1')
+        $seedManifest = Join-Path $modelRoot 'manifests/registry.ollama.ai/library/qwen3.5/9b'
+        if ((Get-FileHash -LiteralPath $seedManifest).Hash.ToLowerInvariant() -cne $expectedDigest) { throw 'Expected the verified model manifest.' }
+        Mark-Time exactModelStaged
+        $result.stage = 'trace-enabled-installer'
+        $result.setup.arguments = @('--prepare-only')
+        $result.setup.controller = 'Unmodified installed bootstrap with external exception recorder'
+        $env:KIOSKAI_CHECK_APP = Join-Path $kioskRoot 'versions/cfe0820440535203-126b6caa66debe89/app'
+        $env:KIOSKAI_CHECK_WRAPPER = Join-Path $PSScriptRoot 'run_with_trace.py'
+        $launchLines = @(
+            '@echo off'
+            '"%~dp0KioskAI-Setup.exe" --prepare-only <NUL >"%~dp0setup.stdout" 2>"%~dp0setup.stderr"'
+            'if errorlevel 1 exit /b %errorlevel%'
+            'cd /d "%KIOSKAI_CHECK_APP%"'
+            'if errorlevel 1 exit /b %errorlevel%'
+            '"..\python\python.exe" -E -s -B -X utf8 "%KIOSKAI_CHECK_WRAPPER%" --app "%KIOSKAI_CHECK_APP%" --evidence "%EVIDENCE_DIR%" <NUL >>"%~dp0setup.stdout" 2>>"%~dp0setup.stderr"'
+            'exit /b %errorlevel%'
+        )
+    }
+    $launchLines | Set-Content -LiteralPath (Join-Path $privateDir 'launch.cmd') -Encoding ascii
     $launcher = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c launch.cmd' -WorkingDirectory $privateDir -WindowStyle Hidden -PassThru
     Mark-Time normalExeStarted
     $lastReport = -30
@@ -280,7 +302,19 @@ try {
         !($after.ollamaInstallerPublisherVerified -or $after.ollamaAppPublisherVerified -or $after.ollamaCliPublisherVerified)) {
         throw 'Could not verify newly installed Ollama, default listener and the official publisher.'
     }
-    if (!$result.secondsFromStart.Contains('freshPullRequested') -or !$result.secondsFromStart.Contains('officialInstallerRequested') -or
+    $pulled = $result.secondsFromStart.Contains('freshPullRequested')
+    if ($ExactModelTrace) {
+        $after.exactModelReused = (!$pulled -and $after.modelDigest -ceq $expectedDigest)
+        if (!$after.exactModelReused) { throw 'The installed model is not the verified model from the successful PC.' }
+        $loaded = @((Invoke-RestMethod "$ollamaUrl/api/ps" -NoProxy -TimeoutSec 15).models | Where-Object name -eq $modelName)
+        if ($loaded.Count -ne 1 -or $loaded[0].digest -cne $expectedDigest) { throw 'Loaded model did not match the pinned digest.' }
+        $after.loadedModelDigest = $loaded[0].digest
+        $after.loadedModelVramBytes = $loaded[0].size_vram
+        $traceState = Get-Content -LiteralPath (Join-Path $evidenceDir 'windows-call-trace.json') -Raw | ConvertFrom-Json
+        $after.windowsErrorRecorderArmed = $traceState.armed -eq $true
+        if (!$after.windowsErrorRecorderArmed) { throw 'Windows call recorder did not arm before the order.' }
+    }
+    if ((!$ExactModelTrace -and !$pulled) -or !$result.secondsFromStart.Contains('officialInstallerRequested') -or
         $after.modelTag -ne $modelName -or !$after.modelDigest -or $after.modelBytes -le 0 -or $after.modelCacheBytes -lt $after.modelBytes -or
         !$after.vision -or !$after.completion) { throw 'Fresh download and vision model proof did not pass.' }
     $versions = @(Get-ChildItem -LiteralPath (Join-Path $kioskRoot 'versions') -Directory | Where-Object Name -match '^[0-9a-f]{16}-[0-9a-f]{16}$')
