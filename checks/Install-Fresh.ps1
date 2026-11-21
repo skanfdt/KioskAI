@@ -153,7 +153,7 @@ try {
         @('Process','User','Machine') | Where-Object { [Environment]::GetEnvironmentVariable($name, $_) }
     })
     $pre = $result.preflight
-    $pre.services = @(Get-Service | Where-Object { $_.Name -like '*ollama*' -or $_.DisplayName -like '*ollama*' }).Count
+    $pre.services = @(Get-CimInstance Win32_Service -Filter "Name LIKE '%Ollama%' OR DisplayName LIKE '%Ollama%'" -Property Name).Count
     $pre.processes = @(Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue).Count
     $pre.binaryOnPath = [bool](Get-Command ollama.exe -CommandType Application -ErrorAction SilentlyContinue)
     $pre.knownBinaryPaths = @($binaryPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count
@@ -203,6 +203,8 @@ try {
         $stdout = Read-SharedText $outFile
         if ($stdout -match '공식 배포처에서 Ollama') { Mark-Time officialInstallerRequested }
         if ($stdout -match 'qwen3\.5:9b 모델을 내려받습니다') { Mark-Time freshPullRequested }
+        $progressLines = [regex]::Matches($stdout, '(?m)^pulling [0-9a-f]{8,64}\s+(\d{1,3})%\s*$')
+        if ($progressLines.Count) { $after.latestLayerPercent = [int]$progressLines[-1].Groups[1].Value }
         if ($stdout -match '(?m)^success\s*$') { Mark-Time pullSucceeded }
         if ($stdout -match '로컬 모델과 이미지 입력 기능을 확인했습니다') { Mark-Time bootstrapVerifiedVision }
         if ($stdout -match '첫 주문을 위해 모델을 메모리에 준비합니다') { Mark-Time normalWarmupStarted }
@@ -242,7 +244,7 @@ try {
         if ($launcher.HasExited) { $result.setup.exitCode = $launcher.ExitCode; throw 'Normal installer exited before the chat was ready.' }
         if ($seconds -ge $lastReport + 30) {
             $lastReport = $seconds
-            Write-Host ('[{0}s] normal setup running, default Ollama API ready={1}' -f $seconds, [bool]$after.ollamaVersion)
+            Write-Host ('[{0}s] normal setup running, default Ollama API ready={1}, latest layer progress={2}' -f $seconds, [bool]$after.ollamaVersion, $after.latestLayerPercent)
             Save-Evidence
         }
         Start-Sleep -Seconds 3
@@ -303,6 +305,28 @@ try {
     $result.setup.stderr = Get-SafeFailure (Read-SharedText $errFile)
     $result.setup.stdoutDiagnostics = Get-SafeFailure (Read-SharedText $outFile)
     $result.setup.checkDiagnostics = Get-SafeFailure ($_.Exception.ToString())
+    if ($result.secondsFromStart.Contains('normalExeStarted')) {
+        # Preserve evidence of stages already completed when a later stage (such as warmup) fails.
+        try {
+            $result.after.ollamaCliInstalled = Test-Path -LiteralPath (Join-Path $ollamaRoot 'ollama.exe') -PathType Leaf
+            $partialModels = @(Get-ModelFiles)
+            $result.after.modelFileCount = $partialModels.Count
+            $result.after.modelCacheBytes = [int64](($partialModels | Measure-Object -Property Length -Sum).Sum)
+        } catch {}
+        if ($result.after.ollamaVersion) {
+            try {
+                $installedTag = (Invoke-RestMethod "$ollamaUrl/api/tags" -NoProxy -TimeoutSec 3).models |
+                    Where-Object name -eq $modelName | Select-Object -First 1
+                if ($installedTag) {
+                    $result.after.modelTag = $installedTag.name
+                    $result.after.modelBytes = $installedTag.size
+                    $modelInfo = Invoke-RestMethod "$ollamaUrl/api/show" -NoProxy -Method Post -ContentType application/json -Body (@{model=$modelName} | ConvertTo-Json) -TimeoutSec 7
+                    $result.after.vision = 'vision' -in $modelInfo.capabilities
+                    $result.after.completion = 'completion' -in $modelInfo.capabilities
+                }
+            } catch {}
+        }
+    }
     Write-Host ('Verification stopped during {0}. See install.json.' -f $result.stage)
 } finally {
     $result.utcFinished = [DateTime]::UtcNow.ToString('o')

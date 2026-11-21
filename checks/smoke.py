@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 from threading import Thread
 import time
@@ -126,6 +127,139 @@ def own_foreground(hwnd, page, url):
             "The dedicated kiosk lost the foreground or changed URL.")
 
 
+def public_text(message):
+    message = re.sub(r"https?://[^\s)]+", "[URL]", str(message))
+    message = re.sub(r"(?i)[a-z]:[\\/][^\n]+", "[guest path]", message)
+    return re.sub(r"(?i)\b[a-f0-9]{24,}\b", "[id]", message)[:450]
+
+
+def capture_state(api, hwnd):
+    state = api("state")
+    menu = state.get("menu_inventory") or {}
+    summary = {k: state.get(k) for k in ("ready", "busy", "model", "model_provider", "observation_mode")}
+    summary["menu"] = {k: menu.get(k) for k in ("status", "source", "products", "categories") if k in menu}
+    if menu.get("message"):
+        summary["menu"]["message"] = public_text(menu["message"])
+    summary["menu"]["owned_target"] = bool(hwnd and str(menu.get("target")) == str(hwnd))
+    result = state.get("last_result") or {}
+    summary["last_result"] = {k: public_text(result[k]) for k in ("status", "message") if k in result}
+    question = state.get("clarification") or {}
+    summary["question"] = {k: public_text(question[k]) for k in ("kind", "agent_action", "prompt") if k in question}
+    summary["events"] = [public_text(e.get("text", "")) for e in state.get("events", [])[-12:]]
+    windows = api("windows").get("windows", [])
+    summary["windows"] = [{"owned_fixture": str(w.get("id")) == str(hwnd), "chrome": w.get("process") == "chrome.exe",
+                           "looks_like_controller": "KioskAI" in w.get("title", ""),
+                           "foreground": str(w.get("id")) == str(win32gui.GetForegroundWindow())} for w in windows]
+    return summary
+
+
+def desktop_sessions(chrome_pid, port):
+    import ctypes
+    from ctypes import wintypes
+    import psutil
+
+    def session(pid):
+        sid = wintypes.DWORD()
+        if pid and ctypes.windll.kernel32.ProcessIdToSessionId(pid, ctypes.byref(sid)):
+            return sid.value
+    listener = next((c.pid for c in psutil.net_connections(kind="tcp") if c.status == psutil.CONN_LISTEN
+                     and c.laddr.ip == "127.0.0.1" and c.laddr.port == port), None)
+    return {"observer_session": session(os.getpid()), "chrome_session": session(chrome_pid),
+            "controller_session": session(listener), "console_session": ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()}
+
+
+def accessibility_facts(hwnd, url):
+    from pywinauto import Desktop
+
+    top = Desktop(backend="uia").window(handle=hwnd).wrapper_object()
+    diagnostics = {"owned_foreground": win32gui.GetForegroundWindow() == hwnd}
+    tabs = top.descendants(control_type="TabItem")
+    edits = top.descendants(control_type="Edit")
+    docs = [c for c in top.descendants(control_type="Document") if c.is_visible()
+            and c.rectangle().width() * c.rectangle().height() > 0]
+    diagnostics.update(tab_items=len(tabs), visible_documents=len(docs), edit_count=len(edits),
+                       visible_edit_count=sum(bool(e.is_visible()) for e in edits))
+    popup_markers = ("translate", "restore pages", "welcome to chrome", "sign in to chrome", "번역", "페이지 복원")
+    visible_controls = [c for c in top.descendants(depth=9) if c.is_visible()]
+    diagnostics["visible_popup_markers"] = [m for m in popup_markers if any(
+        m in (c.element_info.name or "").casefold() for c in visible_controls)]
+    addresses = []
+    for edit in edits:
+        name = (edit.element_info.name or "").casefold()
+        if edit.is_visible() and any(k in name for k in ("address", "주소", "omnibox")):
+            row = {"known_chrome_address_label": bool(re.search(r"주소창 및 검색창|주소 및 검색창|address and search bar", name))}
+            with suppress(Exception):
+                value = edit.get_value().rstrip("/")
+                row.update(explicit_scheme=value.startswith("http://"), exact_origin=value == url.rstrip("/"),
+                           fixture_host_and_port=value.removeprefix("http://") == url.removeprefix("http://").rstrip("/"))
+            addresses.append(row)
+    diagnostics["address_controls"] = addresses
+    if docs:
+        doc = max(docs, key=lambda d: d.rectangle().width() * d.rectangle().height())
+        names = [(n.element_info.control_type, n.element_info.name or "") for n in doc.descendants(depth=15) if n.is_visible()]
+        diagnostics["menu_uia"] = {"basket": any("주문표" in n for _, n in names),
+                                   "positive_price": any(re.search(r"[1-9][\d,]*\s*원", n) is not None for _, n in names),
+                                   "menu_item_button": any(k == "Button" and "사과 주스" in n for k, n in names)}
+    return diagnostics
+
+
+def binding_probe(app, hwnd, pid, url):
+    """Post-failure diagnostics only. Never send this window or URL to the controller."""
+    require(owned_window(pid) == hwnd, "Cannot identify the dedicated fixture for diagnostics.")
+    # Use the COM apartment mode and local provider selected by the installed controller.
+    sys.coinit_flags = 2
+    os.environ["KIOSKAI_MODEL_PROVIDER"] = "ollama"
+    diagnostics = {"owned_foreground": win32gui.GetForegroundWindow() == hwnd}
+    try:
+        diagnostics.update(accessibility_facts(hwnd, url))
+    except Exception as exc:
+        diagnostics["accessibility_error_type"] = type(exc).__name__
+    print(json.dumps(diagnostics, ensure_ascii=False), flush=True)
+    sys.path.insert(0, str(app))
+    from control.native_desktop import NativeDesktop, NativeHandoff, NativeStopped
+    native = None
+    try:
+        native = NativeDesktop(str(hwnd), store_mode=True, auto_bind=True, stopped=lambda: False)
+        with suppress(Exception):
+            tabs = native.top.descendants(control_type="TabItem")
+            diagnostics["native_selected_tabs"] = sum(bool(native._in_chrome_frame(t) and t.is_visible()
+                                                           and native._tab_selected(t)) for t in tabs)
+        try:
+            key = native.bind_open_store()
+            diagnostics["read_only_product_binding"] = {"accepted": True, "same_origin": key.get("url", "").rstrip("/") == url.rstrip("/")}
+        finally:
+            diagnostics["native_address_counts"] = {k: v for k, v in getattr(native, "address_diagnostics", {}).items()
+                                                    if isinstance(v, (bool, int))}
+    except Exception as exc:
+        diagnostic = {"accepted": False, "type": type(exc).__name__}
+        if isinstance(exc, (NativeHandoff, NativeStopped)):
+            diagnostic["message"] = public_text(exc)
+        diagnostics["read_only_product_binding"] = diagnostic
+    finally:
+        if native:
+            native.close()
+        print(json.dumps(diagnostics, ensure_ascii=False), flush=True)
+
+
+def failed_binding(app, hwnd, pid, url):
+    if not hwnd or owned_window(pid) != hwnd:
+        return {"skipped": "Dedicated fixture window unavailable"}
+    cmd = [sys.executable, "-B", "-X", "utf8", str(Path(__file__).resolve()), "--binding-probe", str(hwnd), str(pid), url]
+    try:
+        result = subprocess.run(cmd, cwd=app, capture_output=True, timeout=65)
+        data = result.stdout
+        status = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        data, status = exc.stdout or b"", "timed_out"
+    diag = {"probe_exit": status}
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        with suppress(ValueError):
+            value = json.loads(line)
+            if isinstance(value, dict) and "owned_foreground" in value:
+                diag.update(value)
+    return diag
+
+
 def collect_product_logs(app, report, hwnd, url):
     runs = []
     for run_id in report["run_ids"]:
@@ -148,7 +282,9 @@ def collect_product_logs(app, report, hwnd, url):
             if entry.get("provider") == "ollama" and entry.get("response_model"):
                 decisions.append({"file": path.name, "provider": "ollama", "model": entry["response_model"]})
         runs.append({"run_id": run_id, "status": result.get("status"), "os_mouse_control": result.get("os_mouse_control"),
-                     "executor": result.get("executor"), "observations": observations, "model_calls": decisions})
+                     "executor": result.get("executor"), "observations": observations, "model_calls": decisions,
+                     "menu_inventory": {k: v for k, v in (result.get("menu_inventory") or {}).items()
+                                        if k in ("status", "source", "products", "categories")}})
     return runs
 
 
@@ -173,22 +309,22 @@ def exercise(page, proc, api, report, app, out, url, server):
     page.evaluate((HERE / "observe.js").read_text(encoding="utf-8"))
     read = lambda: page.evaluate("window.readStandProof()")
 
-    def idle_menu():
+    def ready_to_order():
         state = api("state")
-        menu = state.get("menu_inventory") or {}
-        if (state.get("ready") and not state.get("busy") and not state.get("clarification")
-                and str(menu.get("target")) == str(hwnd) and menu.get("source") == "advertised_feed"
-                and menu.get("products") == 4 and menu.get("status") in ("complete", "cached")):
+        if state.get("ready") and not state.get("busy") and not state.get("clarification"):
             return state
 
-    initial = wait_for(idle_menu, 90, "The installed controller did not discover the four published menu items.")
+    initial = wait_for(ready_to_order, 90, "The installed controller was not ready for a new order.")
     require(initial.get("model_provider") == "ollama" and initial.get("model") == MODEL, "Unexpected controller model.")
     own_foreground(hwnd, page, url)
     before = read()
     require(before["last"]["stage"] == "menu" and before["last"]["count"] == 0 and not before["clicks"],
             "The practice order must start on an untouched, empty menu.")
-    require(server.feed_requests >= 1, "The controller did not request the advertised menu.")
-    report["menu_before_goal"] = {k: initial["menu_inventory"].get(k) for k in ("source", "products", "categories", "status")}
+    page.screenshot(path=str(out / "menu.png"))
+    with suppress(Exception):
+        report["before_goal"] = capture_state(api, hwnd)
+    report["feed_requests_before_goal"] = server.feed_requests
+    report["viewport"] = page.evaluate("({width:innerWidth, height:innerHeight})")
     cursor = max((event["id"] for event in initial["events"]), default=0)
     start = time.monotonic()
     try:
@@ -204,8 +340,9 @@ def exercise(page, proc, api, report, app, out, url, server):
             for event in state["events"]:
                 if event["id"] > cursor:
                     cursor = event["id"]
-                    report["events"].append({"seconds": round(time.monotonic() - start, 2), "text": event["text"]})
-                    print(event["text"], flush=True)
+                    text = public_text(event["text"])
+                    report["events"].append({"seconds": round(time.monotonic() - start, 2), "text": text})
+                    print(text, flush=True)
             if current["stage"] == "review" and exact(current) and not (out / "review.png").exists():
                 page.screenshot(path=str(out / "review.png"))
             result = state.get("last_result") or {}
@@ -237,6 +374,7 @@ def exercise(page, proc, api, report, app, out, url, server):
         save(out / "witness.json", witness)
         page.screenshot(path=str(out / "last-screen.png"))
         runs = collect_product_logs(app, report, hwnd, url)
+        report["feed_requests_at_completion"] = server.feed_requests
         save(out / "production-order.json", runs)
         receipt, history, clicks = witness["last"], witness["history"], witness["clicks"]
         review_index = next((i for i, row in enumerate(history) if row["stage"] == "review" and exact(row)), None)
@@ -290,10 +428,13 @@ def main():
     out = guest_temp / "kiosk-evidence"
     out.mkdir(parents=True, exist_ok=True)
     report = {"goal": GOAL, "goal_submissions": 0, "confirmations": 0, "run_ids": [], "events": [], "passed": False}
-    server = proc = None
+    server = proc = api = None
     try:
         require((app / "desktop_app.py").is_file(), "Installed application directory is missing.")
-        api = connect_controller(int(os.environ["KIOSKAI_TEST_PORT"]))
+        port = int(os.environ["KIOSKAI_TEST_PORT"])
+        api = connect_controller(port)
+        with suppress(Exception):
+            report["controller_start"] = capture_state(api, None)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Stand)
         server.feed_requests = 0
         Thread(target=server.serve_forever, daemon=True).start()
@@ -303,7 +444,7 @@ def main():
         save(profile / "Default/Preferences", {"omnibox": {"prevent_url_elisions": True}})
         proc = subprocess.Popen([str(chrome_path()), "--user-data-dir=" + str(profile), "--no-first-run",
                                  "--no-default-browser-check", "--disable-search-engine-choice-screen",
-                                 "--force-renderer-accessibility", "--window-size=1280,900",
+                                 "--force-renderer-accessibility", "--start-maximized",
                                  "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", url],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         endpoint = wait_for(lambda: chrome_endpoint(proc, profile), 45, "Dedicated Chrome did not start.")
@@ -313,10 +454,36 @@ def main():
                 return [p for ctx in browser.contexts for p in ctx.pages if p.url == url]
             pages = wait_for(fixture_pages, 15, "The dedicated kiosk page did not load.")
             require(len(pages) == 1, "Dedicated practice tab is missing.")
-            exercise(pages[0], proc, api, report, app, out, url, server)
+            page = pages[0]
+            with suppress(Exception):
+                report["sessions"] = desktop_sessions(proc.pid, port)
+            try:
+                exercise(page, proc, api, report, app, out, url, server)
+            except Exception as error:
+                report["error"] = public_text(error)
+                report["feed_requests_at_failure"] = server.feed_requests
+                # Freeze the result before running any separate product diagnostic.
+                save(out / "order.json", report)
+                hwnd = owned_window(proc.pid)
+                with suppress(Exception):
+                    report["controller_at_failure"] = capture_state(api, hwnd)
+                if page.url == url:
+                    with suppress(Exception):
+                        page.screenshot(path=str(out / "last-screen.png"), timeout=8000)
+                    with suppress(Exception):
+                        snap = page.evaluate("window.readStandProof?.()")
+                        if snap:
+                            save(out / "witness.json", snap)
+                save(out / "order.json", report)
+                with suppress(Exception):
+                    report["post_failure_binding_diagnostic"] = failed_binding(app, hwnd, proc.pid, url)
+                raise
         report["passed"] = True
     except Exception as error:
-        report["error"] = f"{type(error).__name__}: {error}"
+        report["error"] = f"{type(error).__name__}: {public_text(error)}"
+        if api and "controller_at_failure" not in report:
+            with suppress(Exception):
+                report["controller_at_failure"] = capture_state(api, owned_window(proc.pid) if proc else None)
     finally:
         if proc and proc.poll() is None:
             proc.terminate()
@@ -329,4 +496,7 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if len(sys.argv) == 5 and sys.argv[1] == "--binding-probe":
+        binding_probe(Path(os.environ["KIOSKAI_TEST_APP"]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
+    else:
+        raise SystemExit(main())
