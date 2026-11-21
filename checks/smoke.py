@@ -10,6 +10,7 @@ import sys
 import tempfile
 from threading import Thread
 import time
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 import win32api
@@ -77,7 +78,20 @@ def connect_controller(port):
     def call(action, payload=None):
         headers = {"Origin": origin, "X-KioskAI-Token": token, "Content-Type": "application/json"}
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        with urlopen(Request(f"{origin}/api/{action}", data=body, headers=headers), timeout=15) as response:
+        request = Request(f"{origin}/api/{action}", data=body, headers=headers)
+        # A slow response to a status read must not cancel an order in progress.
+        if action == "state" and body is None:
+            deadline = time.monotonic() + 240
+            while True:
+                try:
+                    with urlopen(request, timeout=45) as response:
+                        return json.load(response)
+                except (TimeoutError, ConnectionResetError, URLError) as error:
+                    if getattr(error, "code", None) or time.monotonic() >= deadline:
+                        raise
+                    print("Waiting for the local controller to answer the status check.", flush=True)
+                    time.sleep(2)
+        with urlopen(request, timeout=45) as response:
             return json.load(response)
     return call
 
@@ -412,6 +426,8 @@ def exercise(page, proc, api, report, app, out, url, server):
                     text = public_text(event["text"])
                     report["events"].append({"seconds": round(time.monotonic() - start, 2), "text": text})
                     print(text, flush=True)
+                    save(out / "order.json", report)
+                    save(out / "witness.json", witness)
             if current["stage"] == "review" and exact(current) and not (out / "review.png").exists():
                 page.screenshot(path=str(out / "review.png"))
             result = state.get("last_result") or {}
@@ -432,7 +448,7 @@ def exercise(page, proc, api, report, app, out, url, server):
                 elif not question:
                     report["status"] = result.get("status")
                     break
-            time.sleep(.3)
+            time.sleep(1.2)
         else:
             raise RuntimeError("The order exceeded 45 minutes.")
         own_foreground(hwnd, page, url)
