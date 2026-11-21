@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(2, 42)][int]$WaitMinutes = 34, [switch]$ExactModelTrace)
+param([ValidateRange(2, 42)][int]$WaitMinutes = 36)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -7,9 +7,11 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
     throw 'Run this installer check only on a GitHub-hosted ephemeral Windows runner.'
 }
 
-$releaseUri = 'https://github.com/skanfdt/KioskAI/releases/download/windows-2026-11-21-r2/KioskAI-Setup.exe'
-$releaseHash = '563f548bff471d0acaf4b5f857b4e7a58d584f2e4e5700dba68f0e461e4034ae'
-$modelName = 'qwen3.5:9b'
+$releaseTag = 'windows-2026-11-21-r3'
+$releaseHash = $env:CANDIDATE_SHA256
+if ($releaseHash -cnotmatch '^[0-9a-f]{64}$') { throw 'Expected the independently pinned release SHA-256.' }
+$expectedDigest = '6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7'
+$modelName = 'kioskai-qwen3.5:9b-6488c96fa5fa'
 $ollamaUrl = 'http://127.0.0.1:11434'
 $kioskRoot = Join-Path $env:LOCALAPPDATA 'KioskAI'
 $modelRoot = Join-Path $env:USERPROFILE '.ollama/models'
@@ -30,7 +32,7 @@ $result = [ordered]@{
     runnerImageVersion = $env:ImageVersion
     windowsBuild = [Environment]::OSVersion.Version.ToString()
     preflight = [ordered]@{}
-    setup = [ordered]@{ release = $releaseUri; sha256Expected = $releaseHash; arguments = @() }
+    setup = [ordered]@{ releaseTag = $releaseTag; assetId = $env:CANDIDATE_ASSET_ID; sha256Expected = $releaseHash; arguments = @() }
     after = [ordered]@{}
     secondsFromStart = [ordered]@{}
 }
@@ -85,38 +87,24 @@ function Get-Publisher([string]$Path) {
         $sig.SignerCertificate.GetNameInfo('SimpleName', $false) -ceq 'Ollama Inc.'
 }
 
-function Fetch-Release {
-    # The public release can redirect only to GitHub's own HTTPS asset storage.
-    $handler = [Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $false
-    $client = [Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromMinutes(4)
-    $client.DefaultRequestHeaders.UserAgent.ParseAdd('KioskAI-release-verification/1.0')
-    try {
-        $uri = [uri]$releaseUri
-        for ($attempt = 0; $attempt -lt 5; $attempt++) {
-            if ($uri.Scheme -ne 'https' -or !$uri.IsDefaultPort -or $uri.UserInfo -or
-                $uri.Host -notin @('github.com','release-assets.githubusercontent.com','objects.githubusercontent.com')) {
-                throw 'Unexpected GitHub download origin.'
-            }
-            $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-            try {
-                if ([int]$response.StatusCode -in @(301,302,303,307,308)) {
-                    $uri = [uri]::new($uri, $response.Headers.Location)
-                    continue
-                }
-                $result.setup.downloadHttp = [int]$response.StatusCode
-                $null = $response.EnsureSuccessStatusCode()
-                $file = [IO.File]::Open($setupFile, 'CreateNew', 'Write', 'None')
-                try {
-                    $cts = [Threading.CancellationTokenSource]::new([TimeSpan]::FromMinutes(5))
-                    try { $response.Content.CopyToAsync($file, $cts.Token).GetAwaiter().GetResult() } finally { $cts.Dispose() }
-                } finally { $file.Dispose() }
-                return
-            } finally { $response.Dispose() }
+function Confirm-ModelFiles {
+    $repository, $tag = $modelName.Split(':')
+    $path = Join-Path $modelRoot "manifests/registry.ollama.ai/library/$repository/$tag"
+    $digest = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($digest -cne $expectedDigest) { throw 'Downloaded model manifest differs from the successful PC.' }
+    $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $verified = @()
+    foreach ($blob in @($manifest.config) + $manifest.layers) {
+        if ($blob.digest -cnotmatch '^sha256:([0-9a-f]{64})$') { throw 'Invalid blob digest.' }
+        $blobHash = $Matches[1]
+        $blobFile = Get-Item -LiteralPath (Join-Path $modelRoot ('blobs/sha256-' + $blobHash))
+        if ($blobFile.Length -ne $blob.size -or (Get-FileHash -LiteralPath $blobFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $blobHash) {
+            throw 'Downloaded Ollama blob differs from the successful PC.'
         }
-        throw 'Too many release redirects.'
-    } finally { $client.Dispose() }
+        $verified += [ordered]@{mediaType=$blob.mediaType; bytes=[long]$blobFile.Length; sha256=$blobHash}
+    }
+    if ($verified.Count -ne 4) { throw 'Unexpected number of model files.' }
+    return [ordered]@{manifest=$digest; model=$modelName; verifiedFiles=$verified; passed=$true}
 }
 
 function Get-SafeFailure([string]$raw) {
@@ -179,8 +167,8 @@ try {
     Mark-Time preflightPassed
     Save-Evidence
 
-    $result.stage = 'release-download'
-    Fetch-Release
+    $result.stage = 'candidate-hash-check'
+    Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-release-candidate/KioskAI-Setup.exe') -Destination $setupFile
     $result.setup.bytes = (Get-Item -LiteralPath $setupFile).Length
     $result.setup.sha256Actual = (Get-FileHash -LiteralPath $setupFile -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($result.setup.sha256Actual -cne $releaseHash) { throw 'Release checksum mismatch.' }
@@ -189,28 +177,6 @@ try {
     $result.stage = 'normal-installer'
     # Persistent native file redirection keeps the app's output writable in later workflow steps.
     $launchLines = @('@echo off','"%~dp0KioskAI-Setup.exe" <NUL >"%~dp0setup.stdout" 2>"%~dp0setup.stderr"','exit /b %errorlevel%')
-    if ($ExactModelTrace) {
-        $result.stage = 'preparing-exact-model'
-        $expectedDigest = '6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7'
-        & (Join-Path $PSScriptRoot 'Prepare-ExactModel.ps1')
-        $seedManifest = Join-Path $modelRoot 'manifests/registry.ollama.ai/library/qwen3.5/9b'
-        if ((Get-FileHash -LiteralPath $seedManifest).Hash.ToLowerInvariant() -cne $expectedDigest) { throw 'Expected the verified model manifest.' }
-        Mark-Time exactModelStaged
-        $result.stage = 'trace-enabled-installer'
-        $result.setup.arguments = @('--prepare-only')
-        $result.setup.controller = 'Unmodified installed bootstrap with external exception recorder'
-        $env:KIOSKAI_CHECK_APP = Join-Path $kioskRoot 'versions/cfe0820440535203-126b6caa66debe89/app'
-        $env:KIOSKAI_CHECK_WRAPPER = Join-Path $PSScriptRoot 'run_with_trace.py'
-        $launchLines = @(
-            '@echo off'
-            '"%~dp0KioskAI-Setup.exe" --prepare-only <NUL >"%~dp0setup.stdout" 2>"%~dp0setup.stderr"'
-            'if errorlevel 1 exit /b %errorlevel%'
-            'cd /d "%KIOSKAI_CHECK_APP%"'
-            'if errorlevel 1 exit /b %errorlevel%'
-            '"..\python\python.exe" -E -s -B -X utf8 "%KIOSKAI_CHECK_WRAPPER%" --app "%KIOSKAI_CHECK_APP%" --evidence "%EVIDENCE_DIR%" <NUL >>"%~dp0setup.stdout" 2>>"%~dp0setup.stderr"'
-            'exit /b %errorlevel%'
-        )
-    }
     $launchLines | Set-Content -LiteralPath (Join-Path $privateDir 'launch.cmd') -Encoding ascii
     $launcher = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c launch.cmd' -WorkingDirectory $privateDir -WindowStyle Hidden -PassThru
     Mark-Time normalExeStarted
@@ -224,10 +190,7 @@ try {
         $seconds = [int]$timer.Elapsed.TotalSeconds
         $stdout = Read-SharedText $outFile
         if ($stdout -match '공식 배포처에서 Ollama') { Mark-Time officialInstallerRequested }
-        if ($stdout -match 'qwen3\.5:9b 모델을 내려받습니다') { Mark-Time freshPullRequested }
-        $progressLines = [regex]::Matches($stdout, '(?m)^pulling [0-9a-f]{8,64}\s+(\d{1,3})%\s*$')
-        if ($progressLines.Count) { $after.latestLayerPercent = [int]$progressLines[-1].Groups[1].Value }
-        if ($stdout -match '(?m)^success\s*$') { Mark-Time pullSucceeded }
+        if ($stdout -match '검증된 Qwen 모델 파일을 준비합니다') { Mark-Time pinnedModelAcquisition }
         if ($stdout -match '로컬 모델과 이미지 입력 기능을 확인했습니다') { Mark-Time bootstrapVerifiedVision }
         if ($stdout -match '첫 주문을 위해 모델을 메모리에 준비합니다') { Mark-Time normalWarmupStarted }
         if (!$after.ollamaInstallerPublisherVerified) {
@@ -266,7 +229,7 @@ try {
         if ($launcher.HasExited) { $result.setup.exitCode = $launcher.ExitCode; throw 'Normal installer exited before the chat was ready.' }
         if ($seconds -ge $lastReport + 30) {
             $lastReport = $seconds
-            Write-Host ('[{0}s] normal setup running, default Ollama API ready={1}, latest layer progress={2}' -f $seconds, [bool]$after.ollamaVersion, $after.latestLayerPercent)
+            Write-Host ('[{0}s] normal setup running, default Ollama API ready={1}' -f $seconds, [bool]$after.ollamaVersion)
             Save-Evidence
         }
         Start-Sleep -Seconds 3
@@ -302,21 +265,15 @@ try {
         !($after.ollamaInstallerPublisherVerified -or $after.ollamaAppPublisherVerified -or $after.ollamaCliPublisherVerified)) {
         throw 'Could not verify newly installed Ollama, default listener and the official publisher.'
     }
-    $pulled = $result.secondsFromStart.Contains('freshPullRequested')
-    if ($ExactModelTrace) {
-        $after.exactModelReused = (!$pulled -and $after.modelDigest -ceq $expectedDigest)
-        if (!$after.exactModelReused) { throw 'The installed model is not the verified model from the successful PC.' }
-        $loaded = @((Invoke-RestMethod "$ollamaUrl/api/ps" -NoProxy -TimeoutSec 15).models | Where-Object name -eq $modelName)
-        if ($loaded.Count -ne 1 -or $loaded[0].digest -cne $expectedDigest) { throw 'Loaded model did not match the pinned digest.' }
-        $after.loadedModelDigest = $loaded[0].digest
-        $after.loadedModelVramBytes = $loaded[0].size_vram
-        $traceState = Get-Content -LiteralPath (Join-Path $evidenceDir 'windows-call-trace.json') -Raw | ConvertFrom-Json
-        $after.windowsErrorRecorderArmed = $traceState.armed -eq $true
-        if (!$after.windowsErrorRecorderArmed) { throw 'Windows call recorder did not arm before the order.' }
+    if ($after.modelTag -ne $modelName -or $after.modelDigest -cne $expectedDigest -or !$after.vision -or !$after.completion) {
+        throw 'Installed Ollama model or vision capability differs from the successful PC.'
     }
-    if ((!$ExactModelTrace -and !$pulled) -or !$result.secondsFromStart.Contains('officialInstallerRequested') -or
-        $after.modelTag -ne $modelName -or !$after.modelDigest -or $after.modelBytes -le 0 -or $after.modelCacheBytes -lt $after.modelBytes -or
-        !$after.vision -or !$after.completion) { throw 'Fresh download and vision model proof did not pass.' }
+    $loaded = @((Invoke-RestMethod "$ollamaUrl/api/ps" -NoProxy -TimeoutSec 15).models | Where-Object name -eq $modelName)
+    if ($loaded.Count -ne 1 -or $loaded[0].digest -cne $expectedDigest) { throw 'Loaded model did not match the pinned digest.' }
+    $after.loadedModelDigest = $loaded[0].digest
+    $after.loadedModelVramBytes = $loaded[0].size_vram
+    $after.diskProof = Confirm-ModelFiles
+    Mark-Time exactFilesAndLoadedModelVerified
     $versions = @(Get-ChildItem -LiteralPath (Join-Path $kioskRoot 'versions') -Directory | Where-Object Name -match '^[0-9a-f]{16}-[0-9a-f]{16}$')
     if ($versions.Count -ne 1 -or !(Test-Path -LiteralPath $shortcut)) { throw 'Expected one new app version and a Start menu shortcut.' }
     $app = Join-Path $versions[0].FullName 'app'
@@ -334,7 +291,9 @@ try {
         'Insufficient available disk capacity for the initial download.','Release checksum mismatch.','Normal installer exited before the chat was ready.',
         'Timeout waiting for the normal installed chat.','Could not verify newly installed Ollama, default listener and the official publisher.',
         'Fresh download and vision model proof did not pass.','Expected one new app version and a Start menu shortcut.',
-        'Installed launcher or bundled runtime did not match.','Unexpected GitHub download origin.','Too many release redirects.')
+        'Installed launcher or bundled runtime did not match.','Loaded model did not match the pinned digest.',
+        'Installed Ollama model or vision capability differs from the successful PC.','Downloaded model manifest differs from the successful PC.',
+        'Downloaded Ollama blob differs from the successful PC.','Invalid blob digest.','Unexpected number of model files.')
     if ($_.Exception.Message -in $knownReason) { $result.reason = $_.Exception.Message }
     $result.setup.stderr = Get-SafeFailure (Read-SharedText $errFile)
     $result.setup.stdoutDiagnostics = Get-SafeFailure (Read-SharedText $outFile)

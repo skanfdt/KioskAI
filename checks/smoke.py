@@ -24,7 +24,7 @@ SITE = HERE / "site"
 GOAL = "사과 주스는 작은 컵으로 한 잔, 큰 컵으로 두 잔 주세요. 귀리 쿠키도 한 개 담고, 총금액을 확인한 뒤 카드 결제 방식을 선택해 주세요."
 ROWS = [("사과 주스", "작은 컵", 1, 3600), ("사과 주스", "큰 컵", 2, 8600), ("귀리 쿠키", "기본", 1, 1900)]
 CONFIRM = "확인한 내용으로 실행"
-MODEL = "qwen3.5:9b"
+MODEL = "kioskai-qwen3.5:9b-6488c96fa5fa"
 TITLE = "물결 주스 스탠드"
 OBSERVER_DEADLINE = time.monotonic() + 45 * 60
 
