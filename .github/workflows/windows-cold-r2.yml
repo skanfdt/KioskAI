@@ -1,0 +1,44 @@
+name: Fresh Windows installation and kiosk order
+
+on:
+  push:
+    branches:
+      - validation/windows-cold-r2
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-order:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out independent test tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify empty Windows guest and launch the published installer
+        timeout-minutes: 40
+        run: |
+          $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          & ./checks/Install-Fresh.ps1
+      - name: Order from a visible practice kiosk and choose card
+        timeout-minutes: 46
+        run: |
+          $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          $python = Join-Path (Split-Path -Parent $env:KIOSKAI_TEST_APP) 'python/python.exe'
+          & $python -E -s -B -X utf8 ./checks/smoke.py
+          exit $LASTEXITCODE
+      - name: Preserve installation and order evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fresh-windows-proof
+          path: |
+            ${{ runner.temp }}/kiosk-evidence/*.json
+            ${{ runner.temp }}/kiosk-evidence/*.png
+          if-no-files-found: warn
+          retention-days: 5

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "currency": "KRW",
+  "categories": [
+    "과일 주스",
+    "구움과자"
+  ],
+  "products": [
+    {
+      "id": "apple",
+      "name": "사과 주스",
+      "price": 3600,
+      "category": "과일 주스",
+      "option_groups": [
+        {
+          "name": "크기",
+          "default": "작은 컵",
+          "choices": [
+            {
+              "name": "작은 컵",
+              "extra": 0
+            },
+            {
+              "name": "큰 컵",
+              "extra": 700
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plum",
+      "name": "자두 주스",
+      "price": 4200,
+      "category": "과일 주스",
+      "option_groups": [
+        {
+          "name": "크기",
+          "default": "작은 컵",
+          "choices": [
+            {
+              "name": "작은 컵",
+              "extra": 0
+            },
+            {
+              "name": "큰 컵",
+              "extra": 700
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "oat",
+      "name": "귀리 쿠키",
+      "price": 1900,
+      "category": "구움과자",
+      "option_groups": []
+    },
+    {
+      "id": "lime",
+      "name": "라임 마들렌",
+      "price": 2300,
+      "category": "구움과자",
+      "option_groups": []
+    }
+  ]
+}
