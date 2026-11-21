@@ -127,6 +127,74 @@ def own_foreground(hwnd, page, url):
             "The dedicated kiosk lost the foreground or changed URL.")
 
 
+def dismiss_translation_bubble(hwnd, page, url):
+    from pywinauto import Desktop
+
+    top = Desktop(backend="uia").window(handle=hwnd).wrapper_object()
+
+    def chrome_tabs():
+        frame_tabs = []
+        for tab in top.descendants(control_type="TabItem"):
+            parent = tab.parent()
+            while parent is not None and parent != top and parent.element_info.control_type != "Document":
+                parent = parent.parent()
+            if parent == top and tab.is_visible():
+                frame_tabs.append(tab)
+        return frame_tabs
+
+    def language_tabs(tabs):
+        labels = {"english", "korean", "영어", "한국어"}
+        return [tab for tab in tabs if (tab.element_info.name or "").strip().casefold() in labels]
+
+    def selected(tab):
+        try:
+            return bool(tab.iface_selection_item.CurrentIsSelected)
+        except Exception:
+            return bool(tab.legacy_properties()["State"] & 2)
+
+    # Only prepare browser chrome, before the single order. Never interact with the page here.
+    time.sleep(2)
+    own_foreground(hwnd, page, url)
+    tabs = chrome_tabs()
+    langs = language_tabs(tabs)
+    selected_before = sum(selected(tab) for tab in tabs)
+    shop_tabs = [tab for tab in tabs if TITLE in (tab.element_info.name or "")]
+    actions = []
+    if (len(langs) == 2 and langs[0].parent() == langs[1].parent() and sum(selected(t) for t in langs) == 1
+            and len(shop_tabs) == 1 and selected(shop_tabs[0])):
+        panel = langs[0].parent()
+        while panel is not None and panel != top:
+            if any(TITLE in (t.element_info.name or "") for t in panel.descendants(control_type="TabItem")):
+                break
+            close = [b for b in panel.descendants(control_type="Button") if b.is_visible()
+                     and (b.element_info.name or "").strip().casefold() in ("close", "닫기")]
+            if len(close) == 1:
+                own_foreground(hwnd, page, url)
+                with suppress(Exception):
+                    close[0].invoke()
+                    actions.append("Closed the Chrome language panel")
+                break
+            panel = panel.parent()
+        if not actions:
+            own_foreground(hwnd, page, url)
+            win32api.keybd_event(0x1B, 0, 0, 0)
+            win32api.keybd_event(0x1B, 0, 2, 0)
+            actions.append("Escape in the verified kiosk Chrome window")
+        time.sleep(.6)
+        if language_tabs(chrome_tabs()):
+            own_foreground(hwnd, page, url)
+            shop_tabs = [tab for tab in chrome_tabs() if TITLE in (tab.element_info.name or "")]
+            if len(shop_tabs) == 1:
+                shop_tabs[0].click_input()
+                actions.append("Clicked the existing shop tab in the Chrome tab strip")
+                time.sleep(.6)
+    own_foreground(hwnd, page, url)
+    after = chrome_tabs()
+    return {"chrome_tabs_before": len(tabs), "language_tabs_before": len(langs), "actions": actions,
+            "selected_before": selected_before, "selected_after": sum(selected(tab) for tab in after),
+            "chrome_tabs_after": len(after), "language_tabs_after": len(language_tabs(after))}
+
+
 def public_text(message):
     message = re.sub(r"https?://[^\s)]+", "[URL]", str(message))
     message = re.sub(r"(?i)[a-z]:[\\/][^\n]+", "[guest path]", message)
@@ -307,6 +375,7 @@ def exercise(page, proc, api, report, app, out, url, server):
                          "moved_pointer_from_corner_without_click": corner}
     print("Dedicated kiosk is visible. Pointer moved from screen corner:", corner, flush=True)
     page.evaluate((HERE / "observe.js").read_text(encoding="utf-8"))
+    report["browser_preparation"] = dismiss_translation_bubble(hwnd, page, url)
     read = lambda: page.evaluate("window.readStandProof()")
 
     def ready_to_order():
