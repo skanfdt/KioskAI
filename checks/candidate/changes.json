@@ -1,23 +1,104 @@
 {
+ "ai/pixel_order.py": {
+  "before": "58fd1c2a58c78c5645a3ccc904bbb4cac87be030ddf1448c0a5aec8081e8416b",
+  "after": "781a962167fd0b3c18057f3a6a67a1fe28e0d11e6d0e258d92d9833b114e89e7",
+  "edits": [
+   [
+    21,
+    21,
+    "_DISMISS_DRAFT = re.compile(r'(?:(?:메뉴|상품)\\s*)?(?:옵션\\s*)?닫기|취소|close(?:\\s+(?:options|dialog))?|cancel',re.I)\n"
+   ],
+   [
+    39,
+    40,
+    "        dict(cart_count=_INT,cart_total=_INT,buttons=_buttons(['product','category','review'])),\n"
+   ],
+   [
+    41,
+    42,
+    "    'and review-cart control. Copy the explicitly printed total number of items and total cart price in won. '\n    'Use -1 for each unavailable value. Never infer an empty basket from a menu. A heading is not a button.'\n"
+   ],
+   [
+    44,
+    45,
+    "        dict(item=_TEXT, quantity=_INT, subtotal=_INT, selected=_array(_TEXT), buttons=_buttons(['option','plus','minus','add','dismiss'])),\n"
+   ],
+   [
+    51,
+    52,
+    "        'Include option buttons even if currently selected. Use dismiss ONLY for an explicit close or cancel '\n        'button inside this product panel. Ignore any control to cancel the overall order. '\n"
+   ],
+   [
+    319,
+    319,
+    "        if view=='menu' and isinstance(value,dict):\n            value={'cart_count':-1,'cart_total':-1,**value}\n"
+   ],
+   [
+    347,
+    348,
+    "                if b['role']=='dismiss':\n                    if view!='draft' or not _DISMISS_DRAFT.fullmatch(label):\n                        continue\n                elif b['role']=='return_menu':\n"
+   ],
+   [
+    367,
+    367,
+    "        if view=='menu' and not (_count(value['cart_count'],10**6) and _count(value['cart_total'],10**9)):\n            raise ValueError('Malformed visual basket summary')\n"
+   ],
+   [
+    506,
+    507,
+    "        if (button.get('tag') and operation in ('review','return_menu','methods','method')\n                or operation=='dismiss_product' or operation=='product' and memory.get('reopening')):\n"
+   ],
+   [
+    512,
+    513,
+    "                return hold('현재 화면에서 누를 버튼의 글자와 위치를 함께 확인하지 못했습니다.')\n"
+   ],
+   [
+    549,
+    550,
+    "    if previous in ('add','category','scroll','return_menu','dismiss_product'):\n"
+   ],
+   [
+    586,
+    588,
+    "    elif previous in ('product','dismiss_product'):\n        active=memory.get('active')\n        expected=pending.get('item') or (lines[active].get('bound_item') if type(active) is int and 0<=active<len(lines) else '')\n        if view=='draft' and previous=='product' and expected and _plain(expected)==_plain(observed['item']):\n            memory.pop('reopening',None)\n        else:\n            before=pending.get('cart')\n            if not expected or before is None or min(before)<0 or memory.get('reopening',{}).get('attempts',0)>=2:\n                return hold('상품을 누른 뒤 옵션 창과 장바구니를 대조하지 못했습니다.')\n            if view=='draft' and previous=='product':\n                return click(_unique(observed,'dismiss'),'dismiss_product',\n                             f\"요청한 {expected} 대신 {observed['item']} 옵션 창이 열려 닫습니다.\",\n                             item=expected,cart=before)\n            if view!='menu':\n                return hold('상품 옵션 창이 닫혔는지 확인하지 못했습니다.')\n            retries=memory.get('reopening',{}).get('attempts',0)\n            memory['reopening']=dict(item=expected,cart=before,attempts=retries+1)\n"
+   ],
+   [
+    601,
+    601,
+    "        cart=[observed.get('cart_count',-1),observed.get('cart_total',-1)]\n        if reopening:=memory.get('reopening'):\n            if reopening['cart']!=cart or min(cart)<0:\n                return hold('메뉴 화면의 수량과 금액이 이전과 같은지 확인하지 못했습니다. 주문표를 확인해 주세요.')\n            remaining=[(i,line) for i,line in remaining if i==memory.get('active')]\n"
+   ],
+   [
+    617,
+    618,
+    "                return click(button,'product',f\"화면에서 {button['label']} 상품을 선택합니다.\",item=button['label'],cart=cart)\n"
+   ]
+  ]
+ },
  "ai/product_transition.py": {
   "before": null,
-  "after": "2a26011524b5ce44c2071fee0a25c17597c539b4de7e4394b040824277be2608",
+  "after": "4da0e21b28bd7f1d07a81cfd470b177ed06087d7983521220be62ea55745d311",
   "edits": [
    [
     0,
     0,
-    "\"\"\"Check the result of a product opener against the next observed editor.\"\"\"\nimport re\n\nfrom agent_context import needs_confirmation\nfrom ai.catalog_option import _binding\nfrom ai.observed_additions import _summary, menu_price_label\nfrom ai.order_scroll import reveal_scroll_target\nfrom ai.screen_order import _plain, visible_products\nfrom control.category_memory import active_category, category_buttons\nfrom control.menu_observation import _product_name\nfrom control.order_request import counted_order_lines\nfrom control.ordering import dialog_item\n\n\ndef _cards(state):\n    \"\"\"Index physical openers, preserving ambiguity when labels are duplicated.\"\"\"\n    labeled = {e['id']: name for name, e in visible_products(state).items()}\n    result = {}\n    for e in state.get('elements', ()):\n        if (e.get('role') not in ('Button','ListItem','Hyperlink') or e.get('kind') != 'click'\n                or not e.get('enabled') or e.get('clipped') or e.get('menu_category') or needs_confirmation(e)):\n            continue\n        name = e.get('menu_product') or _product_name(e['role'], e['name']) or labeled.get(e['id'])\n        if name:\n            result.setdefault(name, []).append(e)\n    return result\n\n\ndef _hidden(state):\n    for hint in state.get('scroll_candidates', ()):\n        if hint.get('kind') == 'product':\n            yield hint['item'], hint\n        elif hint.get('kind') == 'named' and (match := menu_price_label(hint['name'])):\n            yield match[1], hint\n\n\ndef opening_expectation(state, goal, plan, target):\n    if state.get('draft_item') or state.get('order_detail') or state.get('order_dialog'):\n        return None\n    opener = plan.get('screen_opener') or {}\n    route = plan.get('category_route') or {}\n    item = opener.get('item') or (route.get('item') if route.get('kind') == 'product' else None)\n    if not item:\n        if plan.get('workflow_role') or plan.get('checkout_route') or route:\n            return None\n        cards = _cards(state)\n        names = set(cards) | {name for name, _ in _hidden(state)} | set(state.get('published_menu', {}))\n        names.update(name for name, _ in counted_order_lines(goal))\n        message = plan['decision'].get('message', '')\n        named = [n for n in names if _plain(n) in _plain(goal) and re.search(\n            re.escape(_plain(n)) + r'(?:을|를|의)?(?:상품을?|메뉴를?)?(?:옵션을?열|추가|담|선택)', _plain(message))]\n        if len(named) == 1:\n            item = named[0]\n        else:\n            matched = [n for n, controls in cards.items() if _plain(n) in _plain(goal)\n                       and any(e['id'] == target['id'] for e in controls)]\n            if len(matched) == 1:\n                item = matched[0]\n    if item:\n        return dict(item=item, binding=_binding(state), cart=_summary(state), clicked=target['name'],\n                    was_category=bool(target.get('menu_category')), attempts=1, dismissed=False, visited=[])\n\n\ndef _action(role, action, message, target=''):\n    return dict(schema_valid=True, workflow_role=role,\n                decision=dict(action=action, target_id=target, text='', evidence='', message=message))\n\n\ndef verify_opener(state, pending, history):\n    \"\"\"None means that this observation positively identified the intended editor.\"\"\"\n    item = pending['item']\n    def stop(message):\n        return _action('product_open_unverified', 'wait_user', message)\n\n    if _binding(state) != pending['binding']:\n        return stop('상품을 연 뒤 키오스크 창이나 페이지가 바뀌었습니다. 주문표를 확인해 주세요.')\n    draft = state.get('draft_item') or dialog_item(state) or (state.get('order_dialog') or {}).get('item')\n    if draft and _plain(draft) == _plain(item):\n        return None\n    if draft:\n        close = state.get('draft_dismiss_id')\n        if not close or pending['dismissed']:\n            return stop(f'요청한 {item} 대신 {draft} 옵션 창이 열려 있습니다. 창을 닫으면 다시 찾겠습니다.')\n        return _action('wrong_product_dismiss', 'click',\n                       f'{item} 대신 {draft} 옵션 창이 열려 닫고 요청한 상품을 다시 찾습니다.', close)\n    if state.get('draft_quantity_ids') or state.get('order_detail') or state.get('order_dialog'):\n        return stop('열린 옵션 창의 상품명을 읽지 못했습니다. 주문표에 담기 전에 현재 상품을 확인해 주세요.')\n    cart = _summary(state)\n    if (pending['cart'] != cart or (cart is None and not pending['was_category'])\n            or state.get('checkout_sheet') or state.get('order_sheet')):\n        return stop('상품을 연 뒤 장바구니가 그대로인지 확인할 수 없습니다. 중복으로 담지 않도록 주문표를 확인해 주세요.')\n    if pending['attempts'] >= 3:\n        return stop(f'{item} 옵션 창이 열렸는지 확인하지 못했습니다. 현재 상품을 확인해 주세요.')\n    controls = [e for name, entries in _cards(state).items() if _plain(name) == _plain(item) for e in entries]\n    if len(controls) == 1:\n        return _action('product_open_retry', 'click',\n                       f'{item} 옵션 창이 열리지 않아 현재 화면에서 찾은 상품 버튼을 다시 누릅니다.', controls[0]['id'])\n    hints = [h for name, h in _hidden(state) if _plain(name) == _plain(item)]\n    if not controls and len(hints) == 1:\n        plan = reveal_scroll_target(state, history, hints[0])\n        if plan:\n            plan['workflow_role'] = 'product_open_reveal'\n            return plan\n    if not controls and not hints:\n        selected = active_category(state)\n        for name, tab in category_buttons(state).items():\n            if name == selected or name in pending['visited']:\n                continue\n            return _action('product_open_category', 'click',\n                           f'{item} 선택 버튼을 찾기 위해 {name} 분류를 확인합니다.', tab['id'])\n    return stop(f'{item} 옵션 창이 열리지 않았고, 현재 화면에서 해당 상품을 하나로 구분할 수 없습니다.')\n"
+    "\"\"\"Check the result of a product opener against the next observed editor.\"\"\"\nimport re\n\nfrom agent_context import needs_confirmation\nfrom ai.catalog_option import _binding\nfrom ai.observed_additions import _summary, menu_price_label\nfrom ai.order_scroll import reveal_scroll_target\nfrom ai.screen_order import _plain, visible_products\nfrom control.category_memory import active_category, category_buttons\nfrom control.menu_observation import _product_name\nfrom control.order_request import counted_order_lines\nfrom control.ordering import dialog_item\n\n\ndef _cards(state):\n    \"\"\"Index physical openers, preserving ambiguity when labels are duplicated.\"\"\"\n    labeled = {e['id']: name for name, e in visible_products(state).items()}\n    result = {}\n    for e in state.get('elements', ()):\n        if (e.get('role') not in ('Button','ListItem','Hyperlink') or e.get('kind') != 'click'\n                or not e.get('enabled') or e.get('clipped') or e.get('menu_category') or needs_confirmation(e)):\n            continue\n        name = e.get('menu_product') or _product_name(e['role'], e['name']) or labeled.get(e['id'])\n        if name:\n            result.setdefault(name, []).append(e)\n    return result\n\n\ndef _hidden(state):\n    for hint in state.get('scroll_candidates', ()):\n        if hint.get('kind') == 'product':\n            yield hint['item'], hint\n        elif hint.get('kind') == 'named' and (match := menu_price_label(hint['name'])):\n            yield match[1], hint\n\n\ndef opening_expectation(state, goal, plan, target):\n    if state.get('draft_item') or state.get('order_detail') or state.get('order_dialog'):\n        return None\n    opener = plan.get('screen_opener') or {}\n    route = plan.get('category_route') or {}\n    item = opener.get('item') or (route.get('item') if route.get('kind') == 'product' else None)\n    if not item:\n        if plan.get('workflow_role') or plan.get('checkout_route') or route:\n            return None\n        cards = _cards(state)\n        names = set(cards) | {name for name, _ in _hidden(state)} | set(state.get('published_menu', {}))\n        names.update(name for name, _ in counted_order_lines(goal))\n        message = plan['decision'].get('message', '')\n        named = [n for n in names if _plain(n) in _plain(goal) and re.search(\n            re.escape(_plain(n)) + r'(?:을|를|의)?(?:상품을?|메뉴를?)?(?:옵션을?열|추가|담|선택)', _plain(message))]\n        if len(named) == 1:\n            item = named[0]\n        else:\n            matched = [n for n, controls in cards.items() if _plain(n) in _plain(goal)\n                       and any(e['id'] == target['id'] for e in controls)]\n            if len(matched) == 1:\n                item = matched[0]\n    if item:\n        return dict(item=item, binding=_binding(state), cart=_summary(state), clicked=target['name'],\n                    was_category=bool(target.get('menu_category')), attempts=1, dismissed=False, visited=[])\n\n\ndef _action(role, action, message, target=''):\n    return dict(schema_valid=True, workflow_role=role,\n                decision=dict(action=action, target_id=target, text='', evidence='', message=message))\n\n\ndef needs_editor_settle(pending, state):\n    draft = state.get('draft_item') or dialog_item(state) or (state.get('order_dialog') or {}).get('item')\n    return not pending.get('settled') and (not draft or pending['dismissed'])\n\n\ndef verify_opener(state, pending, history):\n    \"\"\"None means that this observation positively identified the intended editor.\"\"\"\n    item = pending['item']\n    def stop(message):\n        return _action('product_open_unverified', 'wait_user', message)\n\n    if _binding(state) != pending['binding']:\n        return stop('상품을 연 뒤 키오스크 창이나 페이지가 바뀌었습니다. 주문표를 확인해 주세요.')\n    draft = state.get('draft_item') or dialog_item(state) or (state.get('order_dialog') or {}).get('item')\n    if draft and _plain(draft) == _plain(item):\n        return None\n    if draft:\n        close = state.get('draft_dismiss_id')\n        if not close or pending['dismissed']:\n            return stop(f'요청한 {item} 대신 {draft} 옵션 창이 열려 있습니다. 창을 닫으면 다시 찾겠습니다.')\n        return _action('wrong_product_dismiss', 'click',\n                       f'{item} 대신 {draft} 옵션 창이 열려 닫고 요청한 상품을 다시 찾습니다.', close)\n    if state.get('draft_quantity_ids') or state.get('order_detail') or state.get('order_dialog'):\n        return stop('열린 옵션 창의 상품명을 읽지 못했습니다. 주문표에 담기 전에 현재 상품을 확인해 주세요.')\n    cart = _summary(state)\n    if (pending['cart'] != cart or (cart is None and not pending['was_category'])\n            or state.get('checkout_sheet') or state.get('order_sheet')):\n        return stop('상품을 연 뒤 장바구니가 그대로인지 확인할 수 없습니다. 중복으로 담지 않도록 주문표를 확인해 주세요.')\n    if pending['attempts'] >= 3:\n        return stop(f'{item} 옵션 창이 열렸는지 확인하지 못했습니다. 현재 상품을 확인해 주세요.')\n    controls = [e for name, entries in _cards(state).items() if _plain(name) == _plain(item) for e in entries]\n    if len(controls) == 1:\n        return _action('product_open_retry', 'click',\n                       f'{item} 옵션 창이 열리지 않아 현재 화면에서 찾은 상품 버튼을 다시 누릅니다.', controls[0]['id'])\n    hints = [h for name, h in _hidden(state) if _plain(name) == _plain(item)]\n    if not controls and len(hints) == 1:\n        plan = reveal_scroll_target(state, history, hints[0])\n        if plan:\n            plan['workflow_role'] = 'product_open_reveal'\n            return plan\n    if not controls and not hints:\n        selected = active_category(state)\n        for name, tab in category_buttons(state).items():\n            if name == selected or name in pending['visited']:\n                continue\n            return _action('product_open_category', 'click',\n                           f'{item} 선택 버튼을 찾기 위해 {name} 분류를 확인합니다.', tab['id'])\n    return stop(f'{item} 옵션 창이 열리지 않았고, 현재 화면에서 해당 상품을 하나로 구분할 수 없습니다.')\n"
    ]
   ]
  },
  "ai/screen_order.py": {
   "before": "62bc5c529bb5a84f6b82b3d4cbdbc94243ca78c6c36e1200362562b22d0de8c8",
-  "after": "df4bd263423342d455bcf2b11d7f9093975eb52c55f69fa594d71d49e3fb215f",
+  "after": "3afd37845287cd28f6189451e90cd8f329d3d1808816c644ff44fadf2027f87a",
   "edits": [
+   [
+    8,
+    9,
+    "from ai.observed_additions import menu_price_label, option_value, _completed_targets, _summary, remaining_line_quantities\r\n"
+   ],
    [
     45,
     45,
-    "\r\n\r\ndef _hint_product_name(hint):\r\n    if needs_confirmation(hint):\r\n        return None\r\n    name = hint.get('item') if hint.get('kind') == 'product' else None\r\n    if hint.get('kind') == 'named':\r\n        match = menu_price_label(hint.get('name', ''))\r\n        if match and int(match[2].replace(',', '')) > 0:\r\n            name = match[1]\r\n    return name if is_catalog_label(name) else None\r\n\r\n\r\ndef has_order_products(state):\r\n    \"\"\"A clipped product can establish a menu and guide a scroll, never a click.\"\"\"\r\n    return bool(visible_products(state) or any(\r\n        _hint_product_name(hint) for hint in state.get('scroll_candidates', ())))\r\n"
+    "\r\n\r\ndef _hint_product_name(hint):\r\n    if needs_confirmation(hint):\r\n        return None\r\n    name = hint.get('item') if hint.get('kind') == 'product' else None\r\n    if hint.get('kind') == 'named':\r\n        match = menu_price_label(hint.get('name', ''))\r\n        if match and int(match[2].replace(',', '')) > 0:\r\n            name = match[1]\r\n    return name if is_catalog_label(name) else None\r\n\r\n\r\ndef has_order_products(state):\r\n    \"\"\"A clipped product can establish a menu and guide a scroll, never a click.\"\"\"\r\n    return bool(visible_products(state) or any(\r\n        _hint_product_name(hint) for hint in state.get('scroll_candidates', ())))\r\n\r\n\r\ndef can_start_after_browsing(state, actions):\r\n    \"\"\"An initially clipped menu may become readable after navigation alone.\"\"\"\r\n    if (not 1 <= len(actions) <= 4 or _summary(state) != [0, 0]\r\n            or any(state.get(key) for key in ('order_sheet', 'checkout_sheet', 'draft_item', 'order_detail', 'order_dialog'))):\r\n        return False\r\n    return all(action.get('executed') is True and (\r\n        action.get('action') == 'scroll' or action.get('action') == 'click' and\r\n        (action.get('initial_dining') or action.get('menu_category_click'))) for action in actions)\r\n"
    ],
    [
     302,
@@ -87,17 +168,17 @@
  },
  "native_agent.py": {
   "before": "6bc28264156bac16dbf126dbad2bc76a4ac39988a2a66fe154432cd8720b0528",
-  "after": "e8ca6aa8f235ac845974c14f9e6bca2e3a0b42ac897890440826c4896a1f96dd",
+  "after": "c5726b42d15a19ee47ac532369ef45f973b15526f3f9e7be1912a3cd219b6941",
   "edits": [
    [
     12,
     13,
-    "from ai.screen_order import bind_sibling_options, existing_order_question, explicit_manifest, has_order_products, identified_draft_line, place_screen_order, plan_catalog_opener, plan_named_reveal, plan_screen_manifest, plan_visible_order, pending_lines, remaining_line_quantities, visible_products, unbound_product_target\n"
+    "from ai.screen_order import bind_sibling_options, can_start_after_browsing, existing_order_question, explicit_manifest, has_order_products, identified_draft_line, place_screen_order, plan_catalog_opener, plan_named_reveal, plan_screen_manifest, plan_visible_order, pending_lines, remaining_line_quantities, visible_products, unbound_product_target\n"
    ],
    [
     16,
     16,
-    "from ai.product_transition import opening_expectation, verify_opener\n"
+    "from ai.product_transition import needs_editor_settle, opening_expectation, verify_opener\n"
    ],
    [
     137,
@@ -107,12 +188,17 @@
    [
     287,
     287,
-    "            transition=context.get('product_transition')\n            recovery=None\n            if transition:\n                recovery=verify_opener(state,transition,previous_actions)\n                if recovery and not (state.get('draft_item') or dialog_item(state)) and not transition.get('settled'):\n                    # Wait for Chrome to publish its opened editor before another input.\n                    desktop.check_stop()\n                    measured('wait',time.sleep,.18)\n                    state=observed()\n                    recovery=verify_opener(state,transition,previous_actions)\n                    transition['settled']=True\n                actual=state.get('draft_item') or dialog_item(state) or (state.get('order_dialog') or {}).get('item')\n                save(f'{index:02}-product-transition.json',dict(expected=transition['item'],clicked=transition['clicked'],\n                     observed=actual,outcome=recovery['workflow_role'] if recovery else 'verified'))\n                if not recovery:\n                    context.pop('product_transition')\n                elif recovery['decision']['action']=='wait_user':\n                    return pause('wait_user',recovery['decision']['message'],reason='product_open_unverified')\n"
+    "            transition=context.get('product_transition')\n            recovery=None\n            if transition:\n                recovery=verify_opener(state,transition,previous_actions)\n                if recovery and needs_editor_settle(transition,state):\n                    # Wait for Chrome to publish its opened editor before another input.\n                    desktop.check_stop()\n                    measured('wait',time.sleep,.18)\n                    state=observed()\n                    recovery=verify_opener(state,transition,previous_actions)\n                    transition['settled']=True\n                actual=state.get('draft_item') or dialog_item(state) or (state.get('order_dialog') or {}).get('item')\n                save(f'{index:02}-product-transition.json',dict(expected=transition['item'],clicked=transition['clicked'],\n                     observed=actual,outcome=recovery['workflow_role'] if recovery else 'verified'))\n                if not recovery:\n                    context.pop('product_transition')\n                elif recovery['decision']['action']=='wait_user':\n                    return pause('wait_user',recovery['decision']['message'],reason='product_open_unverified')\n"
    ],
    [
     295,
     296,
     "            if (not recovery and screen_agent and observation_mode=='gemma_vision' and hasattr(desktop,'_check_document')\n"
+   ],
+   [
+    509,
+    510,
+    "            if (not screen_order and not offers and not dining_only\n                    and (starting_order or not continuation and not order_intent and not dining_plan and not recovery\n                         and can_start_after_browsing(state, result['actions']))\n"
    ],
    [
     513,
@@ -147,7 +233,7 @@
    [
     1144,
     1144,
-    "                if recovery:\n                    if recovery['workflow_role']=='wrong_product_dismiss':\n                        transition['dismissed']=True\n                    elif recovery['workflow_role']=='product_open_category':\n                        transition['visited'].append(target['name'])\n                    elif recovery['workflow_role']=='product_open_retry':\n                        transition.update(attempts=transition['attempts']+1,clicked=target['name'],\n                                          was_category=False,settled=False)\n                elif (ordering and supports_dialog_batch and action['action']=='click' and not verification_only\n                      and (place_screen_order(goal) or is_cart_add_goal(goal))):\n                    expectation=opening_expectation(state,goal,plan,target)\n                    if expectation:\n                        context['product_transition']=expectation\n                        record['expected_editor']=expectation['item']\n"
+    "                if action['action']=='click' and target.get('menu_category') and not context.get('product_transition'):\n                    record['menu_category_click']=True\n                if recovery:\n                    if recovery['workflow_role']=='wrong_product_dismiss':\n                        transition.update(dismissed=True,settled=False)\n                    elif recovery['workflow_role']=='product_open_category':\n                        transition['visited'].append(target['name'])\n                    elif recovery['workflow_role']=='product_open_retry':\n                        transition.update(attempts=transition['attempts']+1,clicked=target['name'],\n                                          was_category=False,settled=False)\n                elif (ordering and supports_dialog_batch and action['action']=='click' and not verification_only\n                      and (place_screen_order(goal) or is_cart_add_goal(goal))):\n                    expectation=opening_expectation(state,goal,plan,target)\n                    if expectation:\n                        context['product_transition']=expectation\n                        record['expected_editor']=expectation['item']\n"
    ]
   ]
  }
