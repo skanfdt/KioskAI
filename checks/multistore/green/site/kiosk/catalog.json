@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "currency": "KRW",
+  "categories": [
+    "버거",
+    "사이드",
+    "음료",
+    "디저트"
+  ],
+  "products": [
+    {
+      "id": "classic",
+      "name": "클래식 치즈버거",
+      "category": "버거",
+      "price": 5900,
+      "emoji": "🍔",
+      "color": "#f3e8ce",
+      "tag": "BEST",
+      "description": "순쇠고기 패티와 체다치즈의 기본에 충실한 맛",
+      "option_groups": [
+        {
+          "name": "구성",
+          "default": "단품",
+          "prompt": "단품 또는 세트를 선택해 주세요",
+          "choices": [
+            {
+              "name": "단품",
+              "extra": 0
+            },
+            {
+              "name": "세트",
+              "extra": 2500,
+              "includes": "프렌치프라이 + 콜라"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "double",
+      "name": "더블 비프버거",
+      "category": "버거",
+      "price": 7900,
+      "emoji": "🍔",
+      "color": "#e8dfcf",
+      "tag": "SIGNATURE",
+      "description": "두 장의 비프 패티, 두 배로 진한 풍미",
+      "option_groups": [
+        {
+          "name": "구성",
+          "default": "단품",
+          "prompt": "단품 또는 세트를 선택해 주세요",
+          "choices": [
+            {
+              "name": "단품",
+              "extra": 0
+            },
+            {
+              "name": "세트",
+              "extra": 2500,
+              "includes": "프렌치프라이 + 콜라"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "chicken",
+      "name": "크리스피 치킨버거",
+      "category": "버거",
+      "price": 6500,
+      "emoji": "🍔",
+      "color": "#f4e5d2",
+      "description": "바삭한 치킨과 아삭한 양상추, 특제 소스",
+      "option_groups": [
+        {
+          "name": "구성",
+          "default": "단품",
+          "prompt": "단품 또는 세트를 선택해 주세요",
+          "choices": [
+            {
+              "name": "단품",
+              "extra": 0
+            },
+            {
+              "name": "세트",
+              "extra": 2500,
+              "includes": "프렌치프라이 + 콜라"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shrimp",
+      "name": "통새우 버거",
+      "category": "버거",
+      "price": 6900,
+      "emoji": "🍤",
+      "color": "#f4dfd3",
+      "description": "탱글한 통새우 패티와 상큼한 타르타르 소스",
+      "option_groups": [
+        {
+          "name": "구성",
+          "default": "단품",
+          "prompt": "단품 또는 세트를 선택해 주세요",
+          "choices": [
+            {
+              "name": "단품",
+              "extra": 0
+            },
+            {
+              "name": "세트",
+              "extra": 2500,
+              "includes": "프렌치프라이 + 콜라"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "veggie",
+      "name": "그린 베지버거",
+      "category": "버거",
+      "price": 6800,
+      "emoji": "🥬",
+      "color": "#e2ebd6",
+      "tag": "GREEN",
+      "description": "식물성 패티에 신선한 채소를 듬뿍",
+      "option_groups": [
+        {
+          "name": "구성",
+          "default": "단품",
+          "prompt": "단품 또는 세트를 선택해 주세요",
+          "choices": [
+            {
+              "name": "단품",
+              "extra": 0
+            },
+            {
+              "name": "세트",
+              "extra": 2500,
+              "includes": "프렌치프라이 + 콜라"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fries",
+      "name": "프렌치프라이",
+      "category": "사이드",
+      "price": 2500,
+      "emoji": "🍟",
+      "color": "#f5edd4",
+      "description": "겉은 바삭, 속은 포슬포슬한 감자튀김",
+      "option_groups": []
+    },
+    {
+      "id": "nuggets",
+      "name": "치킨너겟 6조각",
+      "category": "사이드",
+      "price": 3900,
+      "emoji": "🍗",
+      "color": "#f1e5d6",
+      "description": "한입에 쏙, 바삭한 치킨너겟과 머스터드",
+      "option_groups": []
+    },
+    {
+      "id": "salad",
+      "name": "그린 샐러드",
+      "category": "사이드",
+      "price": 4200,
+      "emoji": "🥗",
+      "color": "#e1eddf",
+      "description": "신선한 잎채소와 방울토마토, 오리엔탈 드레싱",
+      "option_groups": []
+    },
+    {
+      "id": "cola",
+      "name": "콜라",
+      "category": "음료",
+      "price": 2000,
+      "emoji": "🥤",
+      "color": "#e7e8ed",
+      "description": "톡 쏘는 시원함, 400ml",
+      "option_groups": []
+    },
+    {
+      "id": "zero",
+      "name": "제로 콜라",
+      "category": "음료",
+      "price": 2000,
+      "emoji": "🥤",
+      "color": "#e0e7e6",
+      "description": "가볍게 즐기는 제로 슈거 콜라, 400ml",
+      "option_groups": []
+    },
+    {
+      "id": "lemon",
+      "name": "레몬에이드",
+      "category": "음료",
+      "price": 3500,
+      "emoji": "🍋",
+      "color": "#f2efcc",
+      "description": "상큼한 레몬과 탄산의 기분 좋은 만남",
+      "option_groups": []
+    },
+    {
+      "id": "coffee",
+      "name": "아메리카노",
+      "category": "음료",
+      "price": 2800,
+      "emoji": "☕",
+      "color": "#e6ded5",
+      "description": "고소하고 깊은 원두의 향, HOT 또는 ICE",
+      "option_groups": [
+        {
+          "name": "온도",
+          "default": "ICE",
+          "prompt": "온도를 선택해 주세요",
+          "choices": [
+            {
+              "name": "ICE",
+              "extra": 0
+            },
+            {
+              "name": "HOT",
+              "extra": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "icecream",
+      "name": "바닐라 소프트콘",
+      "category": "디저트",
+      "price": 1800,
+      "emoji": "🍦",
+      "color": "#ede5f0",
+      "description": "부드러운 바닐라 아이스크림으로 달콤하게",
+      "option_groups": []
+    },
+    {
+      "id": "brownie",
+      "name": "초콜릿 브라우니",
+      "category": "디저트",
+      "price": 3200,
+      "emoji": "🍫",
+      "color": "#e9dcd7",
+      "description": "진한 초콜릿과 촉촉한 식감의 작은 행복",
+      "option_groups": []
+    }
+  ]
+}

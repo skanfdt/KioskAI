@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#203c32">
+  <title>모로우 커피 | 카페 키오스크</title>
+  <link rel="stylesheet" href="./cafe.css">
+  <script src="./cafe.js" defer></script>
+</head>
+<body>
+  <header class="mast">
+    <div class="wrap mast-inner">
+      <div class="identity"><span class="seal" aria-hidden="true">m.</span><span lang="en">Morrow Coffee</span></div>
+      <span class="practice">연습용 키오스크</span>
+    </div>
+  </header>
+  <main class="wrap" id="counter" tabindex="-1"></main>
+  <footer id="tray"></footer>
+  <div role="status" aria-live="polite" class="sr" id="announcement"></div>
+  <dialog id="customize" aria-labelledby="drink-name">
+    <form id="drink-form">
+      <div class="dialog-top"><span id="drink-category" class="kicker"></span><button class="close" type="button" aria-label="메뉴 옵션 닫기">×</button></div>
+      <h2 id="drink-name"></h2>
+      <p id="drink-detail" class="muted"></p>
+      <div id="drink-choices"></div>
+      <div class="quantity-line"><strong>수량</strong><div class="stepper">
+        <button type="button" id="fewer" aria-label="선택 수량 줄이기">−</button>
+        <output id="portion" aria-label="선택 수량">1</output>
+        <button type="button" id="more" aria-label="선택 수량 늘리기">+</button>
+      </div></div>
+      <button class="primary full" type="submit" id="pack">주문표에 담기</button>
+    </form>
+  </dialog>
+</body>
+</html>

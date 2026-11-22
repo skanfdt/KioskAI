@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#164c3b"><title>그린버거 | 테스트 키오스크</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header class="header"><a class="brand" href="./" aria-label="그린버거 첫 화면"><span class="brandmark">g.</span><span>GREEN BURGER<small>좋은 한 끼, 가볍게 주문하세요.</small></span></a><div class="header-right"><span class="demo-label">연습용 매장</span><button class="quiet" id="reset">처음부터</button></div></header>
+<main>
+<div class="intro"><div><p class="eyebrow">FRESHLY MADE, JUST FOR YOU</p><h1 id="page-title">오늘은 어떤 메뉴가 좋으세요?</h1><p id="page-description">먹고 싶은 메뉴를 골라 나만의 한 끼를 담아보세요.</p></div><div class="dining" role="group" aria-label="이용 방법"><button id="dine-in" aria-pressed="true">매장에서 먹기</button><button id="takeout" aria-pressed="false">포장하기</button></div></div>
+<ol class="steps" aria-label="주문 단계"><li id="step-menu" aria-current="step"><b>1</b> 메뉴 담기</li><li id="step-review"><b>2</b> 주문 확인</li><li id="step-payment"><b>3</b> 결제 방식</li></ol>
+<div class="layout"><section class="main-panel" id="content" aria-label="메뉴 선택"></section><aside class="cart" aria-label="장바구니"><div class="cart-heading"><h2>내 주문 <span id="cart-count">0</span></h2><button class="text-button" id="clear-cart">비우기</button></div><div id="cart-items"></div><div class="cart-bottom"><p class="cart-note">모든 가격은 부가세 포함입니다.</p><div class="total"><span>합계</span><strong id="total-price">0원</strong></div><button class="primary wide" id="next-step" disabled>메뉴를 담아 주세요</button><p class="test-note">결제 방식 선택까지만 진행되는 테스트입니다.</p></div></aside></div>
+</main>
+<footer><span>GREEN BURGER · DEMO STORE</span><span>실제 주문·결제는 이루어지지 않습니다.</span></footer>
+<dialog id="item-dialog" aria-labelledby="item-title"><form id="item-form"><div class="dialog-heading"><span class="eyebrow">MAKE IT YOURS</span><button type="button" class="close" id="close-item" aria-label="메뉴 옵션 닫기">×</button></div><div id="item-detail"></div><div class="modal-footer"><div class="stepper"><button type="button" id="modal-minus" aria-label="담을 수량 줄이기">−</button><output id="modal-quantity" aria-live="polite">1</output><button type="button" id="modal-plus" aria-label="담을 수량 늘리기">+</button></div><button class="primary" id="add-item" type="submit">담기</button></div></form></dialog>
+<dialog id="reset-dialog" aria-labelledby="reset-title"><h2 id="reset-title">주문을 비울까요?</h2><p>담아 둔 메뉴와 선택한 옵션이 모두 지워집니다.</p><div class="actions"><button id="keep-order" class="secondary">계속 주문하기</button><button id="confirm-reset" class="primary">모두 비우기</button></div></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="app.js"></script>
+</body></html>

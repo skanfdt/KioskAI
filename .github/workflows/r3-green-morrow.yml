@@ -1,0 +1,60 @@
+name: R3 Green Burger and Morrow Cafe orders
+
+on:
+  push:
+    branches:
+      - validation/r3-green-morrow
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_TAG: windows-2026-11-21-r3
+  CANDIDATE_SHA256: '433a4e27a3ea0e93d6b13d5982f8cfc19ca6cfd0e4f3e23cff1af27b5db8e3d7'
+  CANDIDATE_ASSET_ID: '775767785'
+
+jobs:
+  order:
+    name: R3 order (${{ matrix.store }})
+    runs-on: windows-2025
+    timeout-minutes: 92
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [green, cafe]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the practice shop and independent observer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Download the public R3 Windows installer
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'verified-release-candidate'
+          $null = New-Item -ItemType Directory -Path $dest
+          $url = 'https://github.com/skanfdt/KioskAI/releases/download/windows-2026-11-21-r3/KioskAI-Setup.exe'
+          Invoke-WebRequest -Uri $url -OutFile (Join-Path $dest 'KioskAI-Setup.exe') -TimeoutSec 180
+      - name: Install and verify the pinned model on an empty Windows guest
+        timeout-minutes: 39
+        run: |
+          $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          & ./checks/Install-Fresh.ps1
+      - name: Run one real order and verify the shop receipt
+        timeout-minutes: 46
+        env:
+          TEST_STORE: ${{ matrix.store }}
+        run: |
+          $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          $python = Join-Path (Split-Path -Parent $env:KIOSKAI_TEST_APP) 'python/python.exe'
+          & $python -E -s -B -X utf8 ./checks/multistore/guest_order.py $env:TEST_STORE
+          exit $LASTEXITCODE
+      - name: Preserve order, receipt and installation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r3-${{ matrix.store }}-proof
+          path: ${{ runner.temp }}/kiosk-evidence/
+          if-no-files-found: error
+          retention-days: 14
