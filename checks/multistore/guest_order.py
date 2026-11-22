@@ -140,6 +140,37 @@ def remaining_editor_row(case, witness, layout):
     return matched[0]
 
 
+def inspect_stopped_editor(case, page, proc, hwnd, url, view):
+    smoke.own_foreground(hwnd, page, url)
+    if (smoke.owned_window(proc.pid) != hwnd or page.title() != case.TITLE or len(page.context.pages) != 1
+            or len(page.frames) != 1 or not view.get("editor") or view.get("stage") != "editor"):
+        return {"reason": "The verified order window has no visible item editor to capture."}
+    dom = page.evaluate(r"""() => {
+        const open = Array.from(document.querySelectorAll('dialog[open]')).filter(e => e.getClientRects().length);
+        if (open.length !== 1 || !open[0].id) return null;
+        const d = open[0];
+        return {id:d.id, title:document.getElementById(d.getAttribute('aria-labelledby'))?.innerText.trim(),
+                labels:Array.from(d.querySelectorAll('label'), e => ({text:e.innerText.trim().slice(0,180),
+                    checked:e.querySelector('input')?.checked ?? null})).slice(0,24)};
+    }""")
+    if not dom or dom.get("title") != view["editor"]["item"]:
+        return {"reason": "The visible dialog and observed product title do not uniquely match."}
+    result = {"dom": dom, "editor": view["editor"], "layout": editor_layout(page)}
+    try:
+        args = [sys.executable, "-E", "-s", "-B", "-X", "utf8", str(HERE/"editor_uia.py"),
+                str(hwnd), str(proc.pid), case.TITLE, dom["id"], dom["title"]]
+        worker = subprocess.run(args, capture_output=True, timeout=15, encoding="utf-8", errors="replace")
+        record = next((line for line in reversed(worker.stdout.splitlines()) if line.startswith("KIOSK_EDITOR ")), None)
+        result["windows"] = json.loads(record.partition(" ")[2]) if record else {"reason":"No Windows dialog record."}
+    except subprocess.TimeoutExpired:
+        result["windows"] = {"reason": "Windows dialog inspection reached its 15-second limit."}
+    smoke.own_foreground(hwnd, page, url)
+    if (smoke.owned_window(proc.pid) != hwnd or page.title() != case.TITLE
+            or page.evaluate("window.readStandProof().last.editor") != view["editor"]):
+        return {"reason":"The original dialog changed before Windows inspection finished."}
+    return result
+
+
 def explicit_basket_quantity(case, view, prompt):
     if view["stage"] not in ("menu", "review") or view.get("editor"):
         return None
@@ -324,6 +355,8 @@ def order(case, directory, page, proc, url, api, app, out, report):
                 save(out / "witness.json", witness)
                 if witness["last"]["stage"] == "editor":
                     report["last_editor_layout"] = editor_layout(page)
+                if report.get("status") != "completed" and report["goal_submissions"]:
+                    save(out / "stopped-editor.json", inspect_stopped_editor(case,page,proc,hwnd,url,witness["last"]))
             with suppress(Exception):
                 page.screenshot(path=str(out / "last-screen.png"), timeout=8000)
         save(out / "order.json", report)

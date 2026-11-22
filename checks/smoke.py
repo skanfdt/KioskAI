@@ -387,6 +387,12 @@ def collect_product_logs(app, report, hwnd, url):
                 if same_target:
                     observations[-1]["visible_product_count"] = len(visible_products(entry))
                     observations[-1]["basket_summary"] = basket_summary(entry)
+                    if entry.get("draft_item"):
+                        observations[-1]["editor_choices"] = [
+                            {"role": e["role"], "name": public_text(e.get("name", "")),
+                             "selected": e.get("selected"), "clipped": bool(e.get("clipped"))}
+                            for e in entry.get("elements", ()) if e.get("role") in ("CheckBox", "RadioButton")
+                        ][:30]
                     observations[-1]["scroll_hints"] = [
                         {k: public_text(s[k]) for k in ("name", "kind", "item", "direction", "distance") if k in s}
                         for s in entry.get("scroll_candidates", ())][:36]
@@ -415,7 +421,7 @@ def collect_product_logs(app, report, hwnd, url):
                 transitions.append({"file": path.name, **{
                     key: public_text(entry.get(key) or "") for key in ("expected", "clicked", "observed", "outcome")
                 }})
-        fault = {key: public_text(result[key]) for key in ("error_type", "error_phase", "message") if key in result}
+        fault = {key: public_text(result[key]) for key in ("error_type", "error_phase", "message", "reason") if key in result}
         if type(result.get("error_hresult")) is int:
             hresult = result["error_hresult"]
             fault.update(error_hresult=hresult, hresult_hex=f"0x{hresult & 0xffffffff:08X}")
