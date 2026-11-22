@@ -1,4 +1,15 @@
 {
+ "ai/checkout_proof.py": {
+  "before": "3866248f77daeee528a9b54d99d7c0448bd7458b911b34fc91ceed7f80b11d61",
+  "after": "daa13863d8ecc47063db0f2bfd49b9cad99c7a232b30ece9c5ca64d25e14e5d6",
+  "edits": [
+   [
+    133,
+    133,
+    "def paired_itemized_review_matches(state, expected):\n    \"\"\"Two independently read live landmarks each account for the entire priced order.\"\"\"\n    count=state.get('independent_review_count')\n    return bool(expected and type(count) is int and count==sum(row['quantity'] for row in expected.values())\n                and _observed_rows(state.get('order_sheet'))==expected\n                and _observed_rows(state.get('basket_sheet'))==expected)\n\n\n"
+   ]
+  ]
+ },
  "ai/pixel_order.py": {
   "before": "58fd1c2a58c78c5645a3ccc904bbb4cac87be030ddf1448c0a5aec8081e8416b",
   "after": "781a962167fd0b3c18057f3a6a67a1fe28e0d11e6d0e258d92d9833b114e89e7",
@@ -86,6 +97,17 @@
    ]
   ]
  },
+ "ai/screen_checkout.py": {
+  "before": "f9105c9292bb83677e9e7f107f3331c68d430809eac74aeef3d6d5752e704c09",
+  "after": "c2f235e11dfd8d3611993e98f9a858af8dde02f59c26cae73d5c0b46327e090c",
+  "edits": [
+   [
+    260,
+    260,
+    "    if rows:=state.get('paired_checkout_rows'):\n        from ai.checkout_proof import _observed_rows, paired_itemized_review_matches\n        if guard['stage']=='review' and not paired_itemized_review_matches(fresh,rows):\n            return False\n        if guard['stage']=='payment' and 'basket_sheet' in fresh and _observed_rows(fresh['basket_sheet'])!=rows:\n            return False\n"
+   ]
+  ]
+ },
  "ai/screen_order.py": {
   "before": "62bc5c529bb5a84f6b82b3d4cbdbc94243ca78c6c36e1200362562b22d0de8c8",
   "after": "3afd37845287cd28f6189451e90cd8f329d3d1808816c644ff44fadf2027f87a",
@@ -109,12 +131,17 @@
  },
  "control/accessible_order.py": {
   "before": "f3a70ef50029886d7c42aafb96ee7f0e11ff0608068751bc5348829abca4138d",
-  "after": "dc8dac1f7f11334adca308844434881990249ec1ec29c951a1d6526110ee354c",
+  "after": "9e8df309064f3abd583e891678eae99250a7672ee07763d2ec423722a51c0f56",
   "edits": [
    [
     13,
     14,
     "_EMPTY = re.compile(r'(?:(?:아직\\s*)?담은\\s*(?:상품|메뉴)(?:가|이)?\\s*없(?:습니다|어요)|(?:장바구니|주문표)[가이]\\s*비어\\s*있습니다|(?:your )?(?:basket|cart) is empty)[.!]?', re.I)\n"
+   ],
+   [
+    160,
+    161,
+    "def _stepper_basket(entries, descriptions=None):\n"
    ],
    [
     162,
@@ -125,6 +152,51 @@
     165,
     165,
     "    # A short viewport can expose the named basket's empty message and badge\n    # while its total is below the fold. Never infer emptiness from a missing row.\n    if counts == [0] and not amounts and any(role == 'Text' and _EMPTY.fullmatch(t) for role,t in entries):\n        if not any(_PLUS.fullmatch(t) or _MINUS.fullmatch(t) or (m := _MONEY.search(t)) and int(m[1].replace(',',''))\n                   for _,t in entries):\n            return dict(rows={}, total=0)\n"
+   ],
+   [
+    193,
+    193,
+    "        if descriptions is not None:\n            descriptions[label] = description\n"
+   ],
+   [
+    197,
+    198,
+    "def _with_side_basket(state, containers, basket_region=None, descriptions=None):\n"
+   ],
+   [
+    204,
+    205,
+    "        if region is basket_region or getattr(region.element_info.element,'CurrentAriaRole','')!='region':\n"
+   ],
+   [
+    245,
+    246,
+    "    review_rows={}\n    matching_details=True\n"
+   ],
+   [
+    255,
+    256,
+    "        if label in review_rows or basket['rows'].get(label)!=row:\n"
+   ],
+   [
+    257,
+    259,
+    "        review_rows[label]=row\n        # Some receipts add included contents after the quantity. These are\n        # trusted only when the other landmark independently prints them too.\n        if descriptions is None or label not in descriptions:\n            matching_details=False\n        else:\n            description=descriptions[label]\n            base=option or description.split(' · ')[0]\n            cart_details=description.removeprefix(base).removeprefix(' · ')\n            main_details=[re.sub(r'\\s+(?:포함|included)$','',p,flags=re.I) for p in parts[q_at+1:]]\n            if main_details!=(cart_details.split(' · ') if cart_details else []):\n                matching_details=False\n    state['order_sheet']=dict(rows=review_rows,total=int(money[1].replace(',','')))\n    if matching_details and basket_region is not None:\n        state['independent_review_count']=int(qty[1])\n"
+   ],
+   [
+    338,
+    338,
+    "        descriptions={}\n"
+   ],
+   [
+    339,
+    340,
+    "            result=_stepper_basket(entries,descriptions)\n"
+   ],
+   [
+    344,
+    345,
+    "                _with_side_basket(state,containers,node,descriptions)\n"
    ]
   ]
  },
@@ -189,7 +261,7 @@
  },
  "native_agent.py": {
   "before": "6bc28264156bac16dbf126dbad2bc76a4ac39988a2a66fe154432cd8720b0528",
-  "after": "c5726b42d15a19ee47ac532369ef45f973b15526f3f9e7be1912a3cd219b6941",
+  "after": "10c1845e19cd1dfc9b1c0f38375c91ef07112ff750fdd8ae9c2198824aa43d42",
   "edits": [
    [
     12,
@@ -245,6 +317,26 @@
     840,
     841,
     "            if (not recovery and not screen_order and not order_intent and supports_dialog_batch and ordering and not offers\n"
+   ],
+   [
+    884,
+    885,
+    "                    if review not in (context.get('visually_checked_review'),context.get('paired_itemized_review')):\n"
+   ],
+   [
+    893,
+    893,
+    "                        from ai.checkout_proof import paired_itemized_review_matches\n                        paired=(boundary=='review' and visual_review.get('comparison')=='unreadable'\n                                and visual_review.get('visual_input') and visual_review.get('api_response_received')\n                                and paired_itemized_review_matches(state,verdict['rows']))\n                        if paired:\n                            visual_review['review_evidence']='matched_independent_cart_and_itemized_review'\n"
+   ],
+   [
+    896,
+    897,
+    "                        if paired:\n                            context['paired_itemized_review']=review\n                            emit('주문표 사진에서 일부 항목을 읽기 어려워 화면의 주문 내역과 장바구니를 각각 확인했습니다. 모든 상품의 옵션·수량·금액이 일치합니다.')\n                        elif visual_review['comparison']!='match':\n"
+   ],
+   [
+    902,
+    903,
+    "                        else:\n                            context['visually_checked_review']=review\n                    if context.get('paired_itemized_review')==review:\n                        state['paired_checkout_rows']=verdict['rows']\n"
    ],
    [
     909,
