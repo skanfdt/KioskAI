@@ -139,6 +139,27 @@
    ]
   ]
  },
+ "control/draft_order.py": {
+  "before": "3476cd4eb37a2a75f2189532c4ccd7a6829a655f4e600ebbf8bd226fa3a9f311",
+  "after": "4ba8ba1c196e87d625a4da9af325ef15a16822706198705dc12701cd4b759af9",
+  "edits": [
+   [
+    78,
+    78,
+    "    if not all(key in by_id for key in ids):\r\n        return None\r\n"
+   ],
+   [
+    327,
+    327,
+    "def _matches_edit(before, after, line, operation, target):\r\n    if operation == 'quantity':\r\n        delta = 1 if target == before['plus'] else -1\r\n        return after['count'] == before['count'] + delta and after['selected'] == before['selected']\r\n    if operation in ('numeric_increase', 'numeric_decrease'):\r\n        expected = {c['name']:c['value'] for c in before['numeric']}\r\n        expected[target['name']] += target['step'] if operation == 'numeric_increase' else -target['step']\r\n        return (after['count'] == before['count'] and _signature(after).get('numeric') == expected\r\n                and {option_value(e) for e in after['choices'] if e['selected']} ==\r\n                    {option_value(e) for e in before['choices'] if e['selected']})\r\n    name = option_value(target)\r\n    return after['count'] == before['count'] and (name in after['selected']) == (name in line['options'])\r\n\r\n\r\ndef _settled_edit(desktop, state, scope, before, line, operation, target):\r\n    # Chromium may publish the output numeral, price label and button geometry\r\n    # in separate accessibility updates. These retries never send input.\r\n    deadline = time.monotonic() + 1.5\r\n    prior = None\r\n    while True:\r\n        desktop.check_stop()\r\n        fresh = desktop.read_dialog_batch(state, scope)\r\n        title = fresh.get('draft_item') or (fresh.get('order_detail') or {}).get('item')\r\n        if title and title != line['item']:\r\n            raise DialogQuantityUnconfirmed('옵션을 조정한 뒤 다른 상품의 옵션 창이 열렸습니다.')\r\n        after = _controls(fresh)\r\n        step = _next(after, line) if after and _matches_edit(before, after, line, operation, target) else None\r\n        if step:\r\n            # Include the next physical control, so a replaced or moved Add is\r\n            # rebound from its latest snapshot, never from the original click.\r\n            signature = (_signature(after), step[0], step[1]['id'], step[1]['rect'])\r\n            if signature == prior:\r\n                return fresh\r\n            prior = signature\r\n        else:\r\n            prior = None\r\n        if time.monotonic() >= deadline:\r\n            elements = fresh.get('elements', ())\r\n            choices = [e for e in elements if e['role'] in ('RadioButton', 'CheckBox')]\r\n            adds = [(e, price) for e in elements if (price := draft_add_amount(fresh, e)) is not None]\r\n            digits = [n for n in fresh.get('draft_texts', ()) if re.fullmatch(r'[1-9]\\d?', n)]\r\n            add_details = ', '.join(f\"{price}원, 위치 {e.get('rect')}, \"\r\n                                    f\"클릭 가능 {center(e, fresh) is not None}\" for e, price in adds)\r\n            detail = (f\"상품명 확인 {bool(title)}, 수량 {after['count'] if after else '?'}, \"\r\n                      f\"창 안의 숫자 {digits}, 수량 버튼 {len(fresh.get('draft_quantity_ids', ()))}개, \"\r\n                      f\"선택 표시 {sum(e.get('selected') is True for e in choices)}/{len(choices)}개, \"\r\n                      f\"금액이 표시된 담기 버튼 {len(adds)}개 ({add_details})\")\r\n            raise DialogQuantityUnconfirmed('상품 옵션·수량 변경 결과를 확인하지 못했습니다. '+detail)\r\n        time.sleep(.045)\r\n\r\n\r\n"
+   ],
+   [
+    377,
+    404,
+    "        fresh = _settled_edit(desktop,state,scope,ui,line,operation,target)\r\n"
+   ]
+  ]
+ },
  "control/native_desktop.py": {
   "before": "ac58af93c0d4921b2fd48b62f58b77e22eafc4ab4fd81cd3d57a1d5e80b79ed1",
   "after": "546c54903dda7e78a31bee04f8acfa978c4015a457beae4e7384681938ce095e",

@@ -45,9 +45,10 @@ def inspect(hwnd, pid, title, dialog_id, item):
         node, parent = queue.popleft()
         info = node.element_info
         el = info.element
+        rect = node.rectangle()
         row = dict(parent=parent, role=info.control_type, aria_role=str(el.CurrentAriaRole or "")[:90],
                    id=str(info.automation_id or "")[:100], name=str(info.name or "")[:180],
-                   offscreen=bool(el.CurrentIsOffscreen))
+                   offscreen=bool(el.CurrentIsOffscreen), bounds=[rect.left, rect.top, rect.right, rect.bottom])
         props = str(el.CurrentAriaProperties or "")
         row["aria_state"] = [s for s in props.split(";") if s.partition("=")[0].strip().lower()
                              in ("checked", "selected", "disabled", "label", "roledescription",
