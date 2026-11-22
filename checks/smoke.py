@@ -355,6 +355,7 @@ def collect_product_logs(app, report, hwnd, url):
         steps = []
         observations = []
         controls_by_step = {}
+        transitions = []
         for path in sorted(root.glob("*.json")):
             entry = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):
@@ -402,13 +403,17 @@ def collect_product_logs(app, report, hwnd, url):
                     for field in ("intended_product", "expected_product", "reason"):
                         if isinstance(entry.get(field), str):
                             steps[-1][field] = public_text(entry[field])
+            if path.name.endswith("-product-transition.json") and path.name.partition("-")[0] in controls_by_step:
+                transitions.append({"file": path.name, **{
+                    key: public_text(entry.get(key) or "") for key in ("expected", "clicked", "observed", "outcome")
+                }})
         fault = {key: public_text(result[key]) for key in ("error_type", "error_phase", "message") if key in result}
         if type(result.get("error_hresult")) is int:
             hresult = result["error_hresult"]
             fault.update(error_hresult=hresult, hresult_hex=f"0x{hresult & 0xffffffff:08X}")
         runs.append({"run_id": run_id, "status": result.get("status"), "os_mouse_control": result.get("os_mouse_control"),
                      "executor": result.get("executor"), "observations": observations, "model_calls": decisions,
-                     "steps": steps, "product_result": fault,
+                     "steps": steps, "product_transitions": transitions, "product_result": fault,
                      "menu_inventory": {k: v for k, v in (result.get("menu_inventory") or {}).items()
                                         if k in ("status", "source", "products", "categories")}})
     return runs
