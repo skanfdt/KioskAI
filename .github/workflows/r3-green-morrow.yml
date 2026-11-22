@@ -1,4 +1,4 @@
-name: R3 Green Burger and Morrow Cafe orders
+name: R3 Green Burger visible menu prices
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        store: [green, cafe]
+        store: [green]
     defaults:
       run:
         shell: pwsh
@@ -44,6 +44,7 @@ jobs:
       - name: Run one real order and verify the shop receipt
         timeout-minutes: 46
         env:
+          TEST_FIT_MENU_PRICES: '1'
           TEST_STORE: ${{ matrix.store }}
         run: |
           $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'

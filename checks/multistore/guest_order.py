@@ -164,6 +164,10 @@ def order(case, directory, page, proc, url, api, app, out, report):
     started = None
     try:
         report["browser_preparation"] = smoke.dismiss_translation_bubble(hwnd, page, url)
+        if os.environ.get("TEST_FIT_MENU_PRICES") == "1" and directory.name == "green":
+            sys.path.insert(0, str(directory))
+            from viewport import fit_menu_prices
+            report["starting_view"] = fit_menu_prices(hwnd, page, url, out)
         def ready():
             state = api("state")
             return state if state.get("ready") and not state.get("busy") and not state.get("clarification") else None
