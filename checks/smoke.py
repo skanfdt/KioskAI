@@ -345,6 +345,12 @@ def failed_binding(app, hwnd, pid, url):
 
 
 def collect_product_logs(app, report, hwnd, url):
+    sys.path.insert(0, str(app))
+    try:
+        from ai.screen_order import visible_products
+        from ai.observed_additions import _summary as basket_summary
+    finally:
+        sys.path.pop(0)
     runs = []
     for run_id in report["run_ids"]:
         require(re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9]+-native-chat", run_id),
@@ -379,6 +385,8 @@ def collect_product_logs(app, report, hwnd, url):
                                      "recognized_item": public_text(entry.get("draft_item") or ""),
                                      "recognized_add_button": bool(entry.get("draft_add_id"))})
                 if same_target:
+                    observations[-1]["visible_product_count"] = len(visible_products(entry))
+                    observations[-1]["basket_summary"] = basket_summary(entry)
                     observations[-1]["scroll_hints"] = [
                         {k: public_text(s[k]) for k in ("name", "kind", "item", "direction", "distance") if k in s}
                         for s in entry.get("scroll_candidates", ())][:36]
