@@ -140,6 +140,22 @@ def remaining_editor_row(case, witness, layout):
     return matched[0]
 
 
+def explicit_basket_quantity(case, view, prompt):
+    if view["stage"] not in ("menu", "review") or view.get("editor"):
+        return None
+    rows = [tuple(row) for row in view.get("rows", [])]
+    if (len(rows) != len(set(rows)) or any(row not in case.ROWS for row in rows)
+            or sum(row[2] for row in rows) != view.get("count") or sum(row[3] for row in rows) != view.get("total")):
+        return None
+    matches = []
+    for row in case.ROWS:
+        item, option = row[:2]
+        label = " ".join(part for part in (item, option.partition(" · ")[0]) if part)
+        if prompt == f"장바구니의 {label} 최종 수량을 몇 개로 맞출까요?":
+            matches.append(row)
+    return matches[0] if len(matches) == 1 and matches[0] in rows else None
+
+
 def order(case, directory, page, proc, url, api, app, out, report):
     if getattr(case, "READY_SELECTOR", ""):
         page.locator(case.READY_SELECTOR).first.wait_for(state="visible", timeout=30000)
@@ -191,6 +207,7 @@ def order(case, directory, page, proc, url, api, app, out, report):
         checkpoint = None
         answered = set()
         resumed_rows = set()
+        quantity_rows = set()
         while time.monotonic() < deadline:
             smoke.own_foreground(hwnd, page, url)
             state = api("state", until=deadline)
@@ -227,6 +244,15 @@ def order(case, directory, page, proc, url, api, app, out, report):
                              and any(view["stage"] == "review" and case.exact(view) for view in witness["history"]))
                     if valid:
                         response = smoke.CONFIRM
+                    elif (question.get("agent_action") == "ask_user" and question.get("free_text") is True
+                          and result.get("status") == "waiting_user" and result.get("message") == question.get("prompt")
+                          and str(question.get("target")) == str(hwnd)):
+                        row = explicit_basket_quantity(case, current, question["prompt"])
+                        smoke.own_foreground(hwnd, page, url)
+                        if not row or row in quantity_rows or read()["last"] != current:
+                            report.update(failure_origin="unverified_or_repeated_quantity_question", status=result.get("status"))
+                            raise RuntimeError("Question or visible cart does not uniquely confirm an original order quantity.")
+                        response = f"{row[2]}개"
                     elif (question.get("agent_action") == "wait_user" and question.get("prompt") == TARGET_CHANGED
                           and result.get("status") == "waiting_user" and result.get("message") == TARGET_CHANGED
                           and "완료했어" in question.get("options", []) and str(question.get("target")) == str(hwnd)):
@@ -256,6 +282,11 @@ def order(case, directory, page, proc, url, api, app, out, report):
                     answered.add(question["id"])
                     if valid:
                         report["confirmations"] += 1
+                    elif question["agent_action"] == "ask_user":
+                        quantity_rows.add(row)
+                        report["quantity_answers"].append({"run_id": result.get("run_id"), "question": question["prompt"],
+                                                           "answer": response, "order_row": row, "before": current,
+                                                           "seconds": round(time.monotonic()-started, 2)})
                     else:
                         resumed_rows.add(row)
                         report["reobservations"].append({"run_id": result.get("run_id"), "editor_row": row,
@@ -310,7 +341,7 @@ def main(store):
     out.mkdir(parents=True, exist_ok=True)
     report = {"store": store, "goal": case.GOAL, "expected_rows": case.ROWS, "expected_count": case.COUNT,
               "expected_total": case.TOTAL, "goal_submissions": 0, "confirmations": 0,
-              "target_changes": [], "reobservations": [],
+              "target_changes": [], "reobservations": [], "quantity_answers": [],
               "run_ids": [], "events": [], "passed": False}
     server = proc = api = None
     try:
