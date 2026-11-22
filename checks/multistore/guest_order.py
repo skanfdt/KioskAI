@@ -74,6 +74,72 @@ def remember_run(report, state):
     return result
 
 
+TARGET_CHANGED = "화면의 대상이 변경되어 멈췄습니다."
+
+
+def editor_layout(page):
+    # Read only the disposable fixture's open dialog, without moving focus or scrolling.
+    return page.evaluate(r"""() => {
+        const d = document.querySelector('dialog[open]');
+        const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
+        const rect = el => {
+            const b = el.getBoundingClientRect();
+            return {x:Math.round(b.x), y:Math.round(b.y), width:Math.round(b.width), height:Math.round(b.height),
+                in_view:b.width>0 && b.height>0 && b.right>0 && b.left<width && b.bottom>0 && b.top<height};
+        };
+        const add = d?.querySelector('button[type=submit]');
+        const prices = (add?.innerText || '').match(/[\d,]+\s*원/g) || [];
+        const selected = d?.querySelector('input[type=radio]:checked');
+        return {client_width:width, client_height:height, dialog:d ? rect(d) : null,
+                controls:d ? Array.from(d.querySelectorAll('input,button,output'), el => ({
+                    id:el.id, kind:el.type || el.tagName, ...rect(el)})) : [],
+                displayed_amount:prices.length===1 ? Number(prices[0].replace(/[^\d]/g,'')) : null,
+                choice_count:d?.querySelectorAll('input[type=radio]').length || 0,
+                selected_label:selected?.closest('label')?.innerText.trim() || ''};
+    }""")
+
+
+def remaining_editor_row(case, witness, layout):
+    view = witness["last"]
+    if view["stage"] != "editor" or not view.get("editor") or not layout.get("dialog"):
+        return None
+    editor = view["editor"]
+    amount = layout["displayed_amount"]
+    if amount is None or editor.get("amount", amount) != amount:
+        return None
+    matched = []
+    for row in case.ROWS:
+        item, option, qty, price = row
+        if (item, qty, price) != (editor["item"], editor["quantity"], amount):
+            continue
+        base, _, includes = option.partition(" · ")
+        if layout["choice_count"]:
+            if base != editor["option"] or (includes and includes not in layout["selected_label"]):
+                continue
+        elif editor["option"] or option not in ("", "기본"):
+            continue
+        matched.append(row)
+    if len(matched) != 1:
+        return None
+    # The cafe hides basket lines in its editor. Use the last itemized review only
+    # while every recorded basket count and total since that review remain the same.
+    basket = view.get("rows", [])
+    if not basket and view.get("count"):
+        for earlier in reversed(witness["history"]):
+            if (earlier.get("count"), earlier.get("total")) != (view.get("count"), view.get("total")):
+                return None
+            if earlier["stage"] == "review" and earlier.get("rows"):
+                basket = earlier["rows"]
+                break
+    entries = [tuple(row) for row in basket]
+    if (len(entries) != len(set(entries)) or any(row not in case.ROWS for row in entries)
+            or any(row[:2] == matched[0][:2] for row in entries)
+            or sum(row[2] for row in entries) != view.get("count")
+            or sum(row[3] for row in entries) != view.get("total")):
+        return None
+    return matched[0]
+
+
 def order(case, directory, page, proc, url, api, app, out, report):
     if getattr(case, "READY_SELECTOR", ""):
         page.locator(case.READY_SELECTOR).first.wait_for(state="visible", timeout=30000)
@@ -120,6 +186,7 @@ def order(case, directory, page, proc, url, api, app, out, report):
         print("Submitted one order without a window or URL.", flush=True)
         checkpoint = None
         answered = set()
+        resumed_rows = set()
         while time.monotonic() < deadline:
             smoke.own_foreground(hwnd, page, url)
             state = api("state", until=deadline)
@@ -149,18 +216,47 @@ def order(case, directory, page, proc, url, api, app, out, report):
                         report["product_message"] = smoke.public_text(result.get("message", ""))
                     break
                 if question["id"] not in answered:
-                    report["pending_question"] = {k: question.get(k) for k in ("agent_action", "question", "options")}
-                    valid = (not answered and question.get("agent_action") == "confirm"
+                    report["pending_question"] = {k: question.get(k) for k in ("agent_action", "prompt", "options")}
+                    valid = (not report["confirmations"] and question.get("agent_action") == "confirm"
                              and str(question.get("target")) == str(hwnd) and smoke.CONFIRM in question.get("options", [])
                              and current["stage"] in ("review","payment") and case.exact(current)
                              and any(view["stage"] == "review" and case.exact(view) for view in witness["history"]))
-                    if not valid:
+                    if valid:
+                        response = smoke.CONFIRM
+                    elif (question.get("agent_action") == "wait_user" and question.get("prompt") == TARGET_CHANGED
+                          and result.get("status") == "waiting_user" and result.get("message") == TARGET_CHANGED
+                          and "완료했어" in question.get("options", []) and str(question.get("target")) == str(hwnd)):
+                        layout = editor_layout(page)
+                        stop = {"run_id": result.get("run_id"), "message": TARGET_CHANGED,
+                                "seconds": round(time.monotonic()-started, 2), "view": current, "layout": layout}
+                        report["target_changes"].append(stop)
+                        report.setdefault("first_interruption", stop)
+                        save(out / "order.json", report)
+                        if len(report["target_changes"]) == 1:
+                            save(out / "first-interruption-witness.json", witness)
+                            page.screenshot(path=str(out / "first-interruption.png"), timeout=8000)
+                        time.sleep(.8)
+                        smoke.own_foreground(hwnd, page, url)
+                        fresh = read()
+                        row = remaining_editor_row(case, fresh, layout)
+                        if (not row or row in resumed_rows or len(resumed_rows) >= 2 or fresh != witness
+                                or editor_layout(page) != layout):
+                            report.update(failure_origin="unverified_or_repeated_editor_pause", status=result.get("status"))
+                            raise RuntimeError("The stopped editor did not qualify for a verified re-observation.")
+                        response = "완료했어"
+                    else:
                         report.update(failure_origin="product_order_or_clarification", status=result.get("status"))
                         raise RuntimeError("Unexpected question or missing independent proof before confirmation.")
-                    answer = {"id": question["id"], "target": question["target"], "answer": smoke.CONFIRM}
-                    smoke.require(api("clarify", answer).get("accepted"), "Controller declined its order confirmation.")
+                    answer = {"id": question["id"], "target": question["target"], "answer": response}
+                    smoke.require(api("clarify", answer).get("accepted"), "Controller declined its requested response.")
                     answered.add(question["id"])
-                    report["confirmations"] = len(answered)
+                    if valid:
+                        report["confirmations"] += 1
+                    else:
+                        resumed_rows.add(row)
+                        report["reobservations"].append({"run_id": result.get("run_id"), "editor_row": row,
+                                                         "answer": response, "seconds": round(time.monotonic()-started, 2)})
+                    save(out / "order.json", report)
                     report.pop("pending_question", None)
             time.sleep(1)
         else:
@@ -193,6 +289,8 @@ def order(case, directory, page, proc, url, api, app, out, report):
                 witness = read()
                 report["last_observed"] = witness["last"]
                 save(out / "witness.json", witness)
+                if witness["last"]["stage"] == "editor":
+                    report["last_editor_layout"] = editor_layout(page)
             with suppress(Exception):
                 page.screenshot(path=str(out / "last-screen.png"), timeout=8000)
         save(out / "order.json", report)
@@ -208,6 +306,7 @@ def main(store):
     out.mkdir(parents=True, exist_ok=True)
     report = {"store": store, "goal": case.GOAL, "expected_rows": case.ROWS, "expected_count": case.COUNT,
               "expected_total": case.TOTAL, "goal_submissions": 0, "confirmations": 0,
+              "target_changes": [], "reobservations": [],
               "run_ids": [], "events": [], "passed": False}
     server = proc = api = None
     try:
