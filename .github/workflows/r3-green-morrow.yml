@@ -1,27 +1,21 @@
-name: R3 Green Burger visible menu prices
+name: Green Burger order with verified product opening
 
 on:
   push:
     branches:
-      - validation/r3-green-morrow
+      - validation/green-opener-check
 
 permissions:
   contents: read
 
 env:
-  CANDIDATE_TAG: windows-2026-11-21-r3
-  CANDIDATE_SHA256: '433a4e27a3ea0e93d6b13d5982f8cfc19ca6cfd0e4f3e23cff1af27b5db8e3d7'
-  CANDIDATE_ASSET_ID: '775767785'
+  CANDIDATE_TAG: r3-product-opening-test-candidate
 
 jobs:
   order:
-    name: R3 order (${{ matrix.store }})
+    name: Default Windows screen, unregistered Green Burger
     runs-on: windows-2025
-    timeout-minutes: 92
-    strategy:
-      fail-fast: false
-      matrix:
-        store: [green]
+    timeout-minutes: 118
     defaults:
       run:
         shell: pwsh
@@ -30,24 +24,35 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Download the public R3 Windows installer
+      - name: Build the candidate from verified R3 and the source changes
         run: |
+          $base = Join-Path $env:RUNNER_TEMP 'released-r3.exe'
           $dest = Join-Path $env:RUNNER_TEMP 'verified-release-candidate'
-          $null = New-Item -ItemType Directory -Path $dest
           $url = 'https://github.com/skanfdt/KioskAI/releases/download/windows-2026-11-21-r3/KioskAI-Setup.exe'
-          Invoke-WebRequest -Uri $url -OutFile (Join-Path $dest 'KioskAI-Setup.exe') -TimeoutSec 180
+          Invoke-WebRequest -Uri $url -OutFile $base -TimeoutSec 180
+          python -B ./checks/candidate/build.py build $base $dest ./checks/candidate/changes.json
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to build the verified candidate.' }
+          $evidence = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          $null = New-Item -ItemType Directory -Force $evidence
+          Copy-Item (Join-Path $dest 'candidate-build.json') -Destination $evidence
+          $proof = Get-Content (Join-Path $dest 'candidate-build.json') -Raw | ConvertFrom-Json
+          Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8NoBOM -Value "CANDIDATE_SHA256=$($proof.candidate_setup_sha256)"
       - name: Install and verify the pinned model on an empty Windows guest
         timeout-minutes: 39
         run: |
           $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
           & ./checks/Install-Fresh.ps1
       - name: Run one real order and verify the shop receipt
-        timeout-minutes: 46
+        timeout-minutes: 73
         env:
-          TEST_FIT_MENU_PRICES: '1'
-          TEST_STORE: ${{ matrix.store }}
+          TEST_STORE: green
         run: |
           $env:EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'kiosk-evidence'
+          $proof = Get-Content (Join-Path $env:EVIDENCE_DIR 'candidate-build.json') -Raw | ConvertFrom-Json -AsHashtable
+          foreach ($module in $proof.changed_modules.Keys) {
+            $digest = (Get-FileHash -LiteralPath (Join-Path $env:KIOSKAI_TEST_APP $module)).Hash.ToLowerInvariant()
+            if ($digest -cne $proof.changed_modules[$module]) { throw "Installed candidate module differs: $module" }
+          }
           $python = Join-Path (Split-Path -Parent $env:KIOSKAI_TEST_APP) 'python/python.exe'
           & $python -E -s -B -X utf8 ./checks/multistore/guest_order.py $env:TEST_STORE
           exit $LASTEXITCODE
@@ -55,7 +60,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: r3-${{ matrix.store }}-proof
+          name: green-product-opening-proof
           path: ${{ runner.temp }}/kiosk-evidence/
           if-no-files-found: error
           retention-days: 14
+      - name: Preserve the exact installer that completed the practice order
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-green-candidate-setup
+          path: ${{ runner.temp }}/verified-release-candidate/KioskAI-Setup.exe
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

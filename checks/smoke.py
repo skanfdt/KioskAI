@@ -354,6 +354,7 @@ def collect_product_logs(app, report, hwnd, url):
         decisions = []
         steps = []
         observations = []
+        controls_by_step = {}
         for path in sorted(root.glob("*.json")):
             entry = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):
@@ -362,11 +363,29 @@ def collect_product_logs(app, report, hwnd, url):
                 window = entry.get("window", {})
                 same_target = (str(window.get("id")) == str(hwnd)
                                and str(entry.get("url", "")).rstrip("/") == url.rstrip("/"))
+                if same_target:
+                    number = path.name.partition("-")[0]
+                    controls_by_step[number] = {
+                        e["id"]: {"name": public_text(e.get("name", "")), "role": e.get("role"),
+                                  "kind": e.get("kind"), "category": bool(e.get("menu_category")),
+                                  "menu_product": public_text(e.get("menu_product") or ""),
+                                  "clipped": bool(e.get("clipped"))}
+                        for e in entry.get("elements", ()) if e.get("id")
+                    }
                 observations.append({"file": path.name, "owned_fixture": same_target,
                                      "automatic_binding": entry.get("auto_store_bound") is True,
                                      "recognized_option_editor": bool(entry.get("inline_draft_id") or entry.get("draft_add_id")),
                                      "recognized_item": public_text(entry.get("draft_item") or ""),
                                      "recognized_add_button": bool(entry.get("draft_add_id"))})
+                if same_target:
+                    observations[-1]["scroll_hints"] = [
+                        {k: public_text(s[k]) for k in ("name", "kind", "item", "direction", "distance") if k in s}
+                        for s in entry.get("scroll_candidates", ())][:36]
+                    observations[-1]["viewport_bounds"] = entry.get("bounds")
+                    observations[-1]["product_labels"] = [
+                        e["name"] for e in controls_by_step[number].values()
+                        if e["menu_product"] or e["kind"] == "click" and not e["category"]
+                    ][:45]
             if entry.get("provider") == "ollama" and entry.get("response_model"):
                 timing = {k: v for k, v in (entry.get("ollama_seconds") or {}).items()
                           if k in ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration")
@@ -377,6 +396,12 @@ def collect_product_logs(app, report, hwnd, url):
                 decision = entry.get("decision") or {}
                 steps.append({"file": path.name, "role": public_text(entry.get("workflow_role", "")),
                               "action": public_text(decision.get("action", "")), "message": public_text(decision.get("message", ""))})
+                controls = controls_by_step.get(path.name.partition("-")[0])
+                if controls is not None:
+                    steps[-1]["resolved_target"] = controls.get(decision.get("target_id"))
+                    for field in ("intended_product", "expected_product", "reason"):
+                        if isinstance(entry.get(field), str):
+                            steps[-1][field] = public_text(entry[field])
         fault = {key: public_text(result[key]) for key in ("error_type", "error_phase", "message") if key in result}
         if type(result.get("error_hresult")) is int:
             hresult = result["error_hresult"]

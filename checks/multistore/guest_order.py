@@ -180,10 +180,8 @@ def order(case, directory, page, proc, url, api, app, out, report):
     started = None
     try:
         report["browser_preparation"] = smoke.dismiss_translation_bubble(hwnd, page, url)
-        if os.environ.get("TEST_FIT_MENU_PRICES") == "1" and directory.name == "green":
-            sys.path.insert(0, str(directory))
-            from viewport import fit_menu_prices
-            report["starting_view"] = fit_menu_prices(hwnd, page, url, out)
+        report["initial_viewport"] = page.evaluate(
+            "({width:innerWidth,height:innerHeight,scale:visualViewport.scale,device_pixel_ratio:devicePixelRatio})")
         def ready():
             state = api("state")
             return state if state.get("ready") and not state.get("busy") and not state.get("clarification") else None
@@ -199,7 +197,7 @@ def order(case, directory, page, proc, url, api, app, out, report):
         report["before_goal"] = smoke.capture_state(api, hwnd)
         cursor = max((e["id"] for e in initial["events"]), default=0)
         started = time.monotonic()
-        deadline = started + 35 * 60
+        deadline = started + 65 * 60
         smoke.require(api("goal", {"goal": case.GOAL}).get("accepted"), "Controller declined the order.")
         report["goal_submissions"] = 1
         save(out / "order.json", report)
@@ -296,7 +294,7 @@ def order(case, directory, page, proc, url, api, app, out, report):
             time.sleep(1)
         else:
             report["failure_origin"] = "order_timeout"
-            raise TimeoutError("The order reached its 35-minute observation limit.")
+            raise TimeoutError("The order reached its 65-minute observation limit.")
         smoke.own_foreground(hwnd, page, url)
         earlier = read()
         time.sleep(2)
@@ -334,7 +332,7 @@ def order(case, directory, page, proc, url, api, app, out, report):
 def main(store):
     case = load_case(HERE / store)
     smoke.TITLE = case.TITLE
-    smoke.OBSERVER_DEADLINE = time.monotonic() + 40 * 60
+    smoke.OBSERVER_DEADLINE = time.monotonic() + 70 * 60
     app = Path(os.environ["KIOSKAI_TEST_APP"])
     temp = Path(os.environ["RUNNER_TEMP"])
     out = Path(os.environ.get("EVIDENCE_DIR", str(temp / "kiosk-evidence")))

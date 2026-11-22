@@ -7,7 +7,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
     throw 'Run this installer check only on a GitHub-hosted ephemeral Windows runner.'
 }
 
-$releaseTag = 'windows-2026-11-21-r3'
+$releaseTag = $env:CANDIDATE_TAG
 $releaseHash = $env:CANDIDATE_SHA256
 if ($releaseHash -cnotmatch '^[0-9a-f]{64}$') { throw 'Expected the independently pinned release SHA-256.' }
 $expectedDigest = '6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7'
